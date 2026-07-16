@@ -15,8 +15,8 @@ xcuserdata/
 .build/
 .swiftpm/
 
-# Generated Xcode project (from XcodeGen project.yml) — keep source of truth in project.yml
-# (commented out: we commit the generated project for reproducibility unless it churns)
+# Generated Xcode project — source of truth is project.yml; regenerate with `xcodegen generate`
+*.xcodeproj
 
 # Misc
 *.log

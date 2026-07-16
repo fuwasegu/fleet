@@ -1,0 +1,56 @@
+name: KanbanTerm
+options:
+  bundleIdPrefix: dev.hirosugu
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGNING_ALLOWED: "NO"
+targets:
+  KanbanKit:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/KanbanKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKit
+        GENERATE_INFOPLIST_FILE: "YES"
+        DEFINES_MODULE: "YES"
+  KanbanTerm:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/KanbanTerm
+    dependencies:
+      - target: KanbanKit
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanTerm
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+  KanbanKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/KanbanKitTests
+    dependencies:
+      - target: KanbanKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKitTests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  KanbanTerm:
+    build:
+      targets:
+        KanbanTerm: all
+        KanbanKitTests: [test]
+    test:
+      targets:
+        - KanbanKitTests
