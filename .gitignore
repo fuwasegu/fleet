@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Generated Xcode project (from XcodeGen project.yml) — keep source of truth in project.yml
+# (commented out: we commit the generated project for reproducibility unless it churns)
+
+# Misc
+*.log

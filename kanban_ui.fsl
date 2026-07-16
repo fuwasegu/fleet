@@ -1,0 +1,138 @@
+// KANBAN Term — UI/ライフサイクル整合性の検証スペック (v3: herdr/Codex/Claude 調査反映)
+// 目的: SPECIFICATION.md を「書かれたまま」モデル化し、仕様が意図しているはずの
+//       不変条件を破る操作列が存在するか(=禁止規則の抜け)を機械検証する。
+//
+// ASSUME-1(表現のみ): カード数=2, 列数=2。
+// ASSUME-2(A: herdr調査): Agent状態は herdr 実装に合わせ {Unknown, Idle, Working, Blocked} の4値。
+//   "Done" は独立状態ではなく (Idle かつ seen=false) の派生 = 別画面にいる間に完了したもの。
+//   閲覧(Terminalを開く)で seen=true になり Done バッジは消える。プロセス終了時は強制的に Idle。
+// ASSUME-3(C): 1カード=1Terminal の1対1対応。作業ディレクトリはプロセス制御せず cwd(Current) を取得表示。
+// ASSUME-4(B): caffeinate のタイムアウト秒数はユーザー入力可(値のみ・挙動不変)。
+//   プロセスが終了(失効/kill)したら GUIトグルも自動OFFにする。
+// ASSUME-5(D: 調査+決定): 対応エージェントは Claude Code のみ(Codexは非対応と決定)。
+//   危険モードスキップはカード毎の bool (Claude=--dangerously-skip-permissions にマップ)。
+spec KanbanUI {
+  type CardId = 0..1
+  type ColId  = 0..1
+  enum AgentSt { Unknown, Idle, Working, Blocked }   // herdr 実装準拠
+
+  state {
+    cols:             Set<ColId>,
+    card_exists:      Map<CardId, Bool>,
+    card_col:         Map<CardId, ColId>,
+    agent:            Map<CardId, AgentSt>,
+    seen:             Map<CardId, Bool>,      // 完了を閲覧済みか。Done = (agent==Idle and not seen)
+    danger_skip:      Map<CardId, Bool>,      // 危険モードスキップ(Claude:--dangerously-skip-permissions)
+    terminal_open:    Option<CardId>,
+    preview_open:     Bool,
+    caffeinate_on:    Bool,
+    caffeinate_alive: Bool
+  }
+  init {
+    cols = Set { 0 }
+    forall c: CardId {
+      card_exists[c] = false
+      card_col[c]    = 0
+      agent[c]       = Unknown
+      seen[c]        = true
+      danger_skip[c] = false
+    }
+    terminal_open    = none
+    preview_open     = false
+    caffeinate_on    = false
+    caffeinate_alive = false
+  }
+
+  // ---- 列(状態) ----
+  action add_column(col: ColId) { requires not cols.contains(col)  cols = cols.add(col) }
+
+  // D1: 空でないと削除不可
+  action remove_column(col: ColId) {
+    requires cols.contains(col)
+    requires forall c: CardId { card_exists[c] => card_col[c] != col }
+    cols = cols.remove(col)
+  }
+
+  // カード生成時に エージェント種別 と 危険モードスキップ を選ぶ (SPEC L27-30 / 要件D)
+  action add_card(c: CardId, col: ColId, danger: Bool) {
+    requires not card_exists[c]
+    requires cols.contains(col)
+    card_exists[c] = true
+    card_col[c]    = col
+    agent[c]       = Unknown      // 素のshell。Agentはまだ起動していない
+    seen[c]        = true
+    danger_skip[c] = danger
+  }
+
+  // D3+D4: 削除時にTerminalを閉じ、Agentを停止し、Done未読も消す
+  action delete_card(c: CardId) {
+    requires card_exists[c]
+    card_exists[c] = false
+    agent[c]       = Idle
+    seen[c]        = true
+    if terminal_open is some(t) {
+      if t == c { terminal_open = none  preview_open = false }
+    }
+  }
+
+  action move_card(c: CardId, col: ColId) {
+    requires card_exists[c]
+    requires cols.contains(col)
+    card_col[c] = col
+  }
+
+  // ---- Terminal / プレビュー ----
+  action open_terminal(c: CardId) {
+    requires card_exists[c]
+    requires terminal_open == none
+    terminal_open = some(c)
+    seen[c]       = true            // 閲覧したので Done(未読完了)は消える
+  }
+  action close_terminal() {
+    requires terminal_open != none
+    terminal_open = none
+    preview_open  = false            // D2: プレビューはTerminalに従属
+  }
+  action open_preview()  { requires terminal_open != none  preview_open = true }
+  action close_preview() { requires preview_open           preview_open = false }
+
+  // ---- Agent 状態遷移 (herdr 準拠: Unknown/Idle/Working/Blocked) ----
+  action agent_launch(c: CardId) {                       // Agent起動 → Working
+    requires card_exists[c]
+    requires agent[c] == Unknown or agent[c] == Idle
+    agent[c] = Working
+    seen[c]  = true
+  }
+  action agent_block(c: CardId)   { requires agent[c] == Working  agent[c] = Blocked }   // 入力待ち
+  action agent_unblock(c: CardId) { requires agent[c] == Blocked  agent[c] = Working }
+  action agent_finish(c: CardId) {                        // 完了 → Idle。閲覧中でなければ Done(未読)
+    requires agent[c] == Working
+    agent[c] = Idle
+    if terminal_open is some(t) {
+      if t == c { seen[c] = true } else { seen[c] = false }
+    } else {
+      seen[c] = false
+    }
+  }
+
+  // ---- caffeinate (B) ----
+  action caffeinate_start()  { requires not caffeinate_on  caffeinate_on = true   caffeinate_alive = true }
+  action caffeinate_stop()   { requires caffeinate_on      caffeinate_on = false  caffeinate_alive = false }
+  action caffeinate_expire() { requires caffeinate_alive   caffeinate_on = false  caffeinate_alive = false }
+
+  // ---- 不変条件 ----
+  invariant PreviewNeedsTerminal   { preview_open => terminal_open != none }
+  invariant CardInExistingColumn   { forall c: CardId { card_exists[c] => cols.contains(card_col[c]) } }
+  invariant TerminalOfExistingCard { terminal_open is some(c) => card_exists[c] }
+  invariant NoZombieAgent          { forall c: CardId { not card_exists[c] => (agent[c] != Working and agent[c] != Blocked and seen[c]) } }
+  invariant CaffeinateToggleSynced { caffeinate_on => caffeinate_alive }
+  invariant DoneClearsOnView       { terminal_open is some(c) => seen[c] }   // 閲覧中カードに未読Doneは出ない
+
+  // ---- 正常系 witness (過剰制約でない証拠) ----
+  reachable CanPreview    { preview_open }
+  reachable CanWorking    { exists c: CardId { agent[c] == Working } }
+  reachable CanBlocked    { exists c: CardId { agent[c] == Blocked } }
+  reachable CanShowDone   { exists c: CardId { card_exists[c] and agent[c] == Idle and not seen[c] } }
+  reachable CanDangerMode { exists c: CardId { card_exists[c] and danger_skip[c] } }
+  reachable CanCaffeinate { caffeinate_on }
+}
