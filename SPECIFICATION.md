@@ -64,6 +64,8 @@ Window ２，３ 個ならいいが，〜８個くらいになってくると，
   - **Unknown**：ペイン前面のプロセスが `claude` として認識できない
   - OSC シーケンス（タイトル OSC 0/2，進捗 OSC 9;4）は SwiftTerm の `OscHandler` / delegate で取得し，バッファ末尾テキストはセル/行 API で読む
   - Working→Idle のちらつき抑制（デバウンス）と，起動直後の猶予期間を設ける
+  - **保守的 Idle 確定（重要・FSL検証済み）**：活動が無くても `❯` アイドルプロンプトを実際に検出できないうちは Idle にせず **Unknown** 表示にフォールバックする。これにより「未知の承認/入力待ちプロンプト」を Idle（＝Done）と誤表示して放置する事故を防ぐ（`agent_detection.fsl` の `RealBlockNotIdle` を induction で証明済み）
+  - **残る本質的限界**：未知パターンの入力待ちは Blocked と“特定”まではできず Unknown 止まり（ヒューリスティックの限界）。承認/許可プロンプトの検出ルールは更新可能なデータとして持ち、パターンを追加できるようにする
 - **プロセス識別はネイティブ必須（E2 の核心）**
   - ペインの前面プロセス（プロセスグループのリーダー）を OS のプロセステーブル（`proc_listpids` / `proc_pidpath` 等）から **Swift 側で列挙**し，`claude` の起動かどうか（Unknown 判定）を行う
   - これは WKWebView 内の JS からは実現できないため Swift ネイティブで実装する（＝サンドボックス外配布が前提）
@@ -85,3 +87,12 @@ UI / ライフサイクルの整合性（プレビューの重なり，カード
 - 削除済みカードの Agent は稼働しない（ゾンビ Agent なし）
 - caffeinate トグル ON ⇒ 実プロセス生存（終了時は自動 OFF）
 - 閲覧中のカードに未読 Done は表示されない
+
+Agent 状態検出（非UI）は `agent_detection.fsl` で形式化し、`fslc verify` / `induction` で以下を証明済み：
+
+- 死んだ/不在の claude を Working・Blocked と表示しない
+- Blocked 表示は本当に入力待ちのときだけ（偽 Blocked なし）
+- デバウンス保留中の表示は Working
+- **実際に入力待ちなら Idle（＝Done）と誤表示しない**（保守的 Idle 確定）
+
+FSL が炙り出した残課題：未知パターンの入力待ちは Blocked と特定できず Unknown 止まり（安全側だが完全ではない。検出ルールの更新で緩和）。

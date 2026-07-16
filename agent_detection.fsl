@@ -1,0 +1,95 @@
+// KANBAN Term — Agent状態検出/デバウンスの仕様穴検査 (非UI)
+// 目的: herdr方式の「生信号 → 公開状態(pub)」検出ロジックを形式化し、
+//       信号の組合せ/順序で誤った公開状態に到達しないかを機械検証する。
+//
+// ASSUME-D1(A調査準拠): 公開状態は herdr 実装の {Unknown, Idle, Working, Blocked}。
+//   Working根拠 = PTYバイト活動 or OSCタイトルのスピナー。Blocked = 既知の承認/許可プロンプト一致。
+//   プロセス非生存(claude非前面) → Unknown。Working→Idle はデバウンス(GRACE回保留)で確定。
+// ASSUME-D2(表現のみ): デバウンス保留回数 GRACE=2。生信号は環境入力として tick の引数で与える。
+// ASSUME-D3(A調査準拠): Blocked は「既知パターン一致時のみ」検出できる。未知の入力待ちは Blocked と
+//   特定できない(herdr: 新種プロンプトは学習前Idle表示)。real_blocked は既知/未知を問わない実際の入力待ち。
+// ASSUME-D4(緩和設計/決定): Idle は ❯ アイドルプロンプト(idle_prompt)を実際に検出したときだけ確定する。
+//   活動なしだがアイドルプロンプトも無い曖昧な状態は Idle にせず Unknown 表示にフォールバック(保守的)。
+//   → 「実際は入力待ちなのに Done(=Idle未閲覧) と誤表示する」危険を防ぐ。
+// ASSUME-D5(表現のみ): 入力待ち画面は ❯ アイドルプロンプトではない → requires real_blocked => not idle_prompt。
+spec AgentDetection {
+  const GRACE = 2
+  enum PubState { Unknown, Idle, Working, Blocked }
+
+  state {
+    pub:            PubState,
+    pending:        0..GRACE,   // Working→Idle 確定までのデバウンス残回数
+    alive:          Bool,       // claude が前面プロセスとして生存
+    activity:       Bool,       // 直近のPTYバイト活動 or スピナー(Working根拠)
+    blocking_known: Bool,       // 既知の承認/許可プロンプトに一致
+    idle_prompt:    Bool,       // ❯ アイドルプロンプトを検出
+    real_blocked:   Bool        // 実際に入力待ち(既知/未知パターン問わず)
+  }
+  init {
+    pub = Unknown
+    pending = 0
+    alive = false
+    activity = false
+    blocking_known = false
+    idle_prompt = false
+    real_blocked = false
+  }
+
+  // 1検出サイクル: 環境の生信号(引数)から pub を再計算する
+  action tick(a: Bool, act: Bool, bk: Bool, ip: Bool, rb: Bool) {
+    requires bk => rb           // 既知ブロック一致なら実際にブロック中(既知は実の部分集合)
+    requires rb => not ip       // ASSUME-D5: 入力待ち画面はアイドルプロンプトではない
+    alive = a
+    activity = act
+    blocking_known = bk
+    idle_prompt = ip
+    real_blocked = rb
+    if not a {
+      pub = Unknown
+      pending = 0
+    } else {
+      if bk {
+        pub = Blocked
+        pending = 0
+      } else {
+        if act {
+          pub = Working
+          pending = 0
+        } else {
+          if pending > 1 {
+            pending = pending - 1          // まだ保留中: pub は Working のまま
+          } else {
+            if pending == 1 {
+              pending = 0
+              if ip { pub = Idle } else { pub = Unknown }   // 満了。❯確認できたときのみIdle
+            } else {
+              // pending == 0
+              if pub == Working {
+                pending = GRACE             // 活動停止 → 保留開始(表示はWorking維持)
+              } else {
+                if ip { pub = Idle } else { pub = Unknown } // 曖昧なら保守的にUnknown
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---- 成り立つべき安全性(検出が誤検出しないこと) ----
+  invariant NoActiveWhenDead      { not alive => pub == Unknown }                // 死んだ/不在のclaudeをWorking/Blocked表示しない
+  invariant BlockedIsReal         { pub == Blocked => (alive and real_blocked) } // Blocked表示は本当に入力待ちのときだけ
+  invariant PendingImpliesWorking { pending > 0 => pub == Working }              // 保留中の表示はWorking
+  // 緩和設計の要: 実際に入力待ちなら Idle(=Done誤表示) にはしない
+  invariant RealBlockNotIdle      { (alive and real_blocked) => pub != Idle }
+
+  // ---- 残る本質的限界を明示(証明できない=ヒューリスティックの限界) ----
+  // 未知パターンの入力待ちは「Blockedと特定」まではできない(Unknown止まり)。安全側だが完全ではない。
+  invariant TrueBlockIsShown      { (alive and real_blocked) => pub == Blocked }
+
+  // ---- 正常系 witness (過剰制約でない証拠) ----
+  reachable CanWorking            { pub == Working }
+  reachable CanIdleAfterWork      { pub == Idle }
+  reachable CanBlocked            { pub == Blocked }
+  reachable ConservativeUnknown   { alive and pub == Unknown }   // 曖昧時の保守フォールバック
+}
