@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import Darwin
 import SwiftData
 @preconcurrency import SwiftTerm
 import KanbanKit
@@ -68,6 +69,8 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 final class TerminalSessions {
     private var views: [UUID: LocalProcessTerminalView] = [:]
     private var monitors: [UUID: AgentStateMonitor] = [:]   // processDelegate は weak なので保持する
+    private var context: ModelContext?
+    private var cwdPollTask: Task<Void, Never>?
 
     func view(for cardID: UUID,
               directory: String?,
@@ -75,6 +78,8 @@ final class TerminalSessions {
               dangerSkip: Bool,
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
+        self.context = context
+        startCwdPollingIfNeeded()
         if let existing = views[cardID] { return existing }
         let term = LocalProcessTerminalView(frame: .zero)
 
@@ -112,6 +117,46 @@ final class TerminalSessions {
         views[cardID]?.terminate()
         views[cardID] = nil
         monitors[cardID] = nil
+    }
+
+    // MARK: - cwd の追従 (OSC7 は既定で来ないので、シェルの cwd をネイティブに定期取得)
+
+    private func startCwdPollingIfNeeded() {
+        guard cwdPollTask == nil else { return }
+        cwdPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                self?.pollCwds()
+            }
+        }
+    }
+
+    private func pollCwds() {
+        guard let context else { return }
+        let store = BoardStore(context: context)
+        var changed = false
+        for (cardID, term) in views {
+            let pid = term.process.shellPid
+            guard pid > 0, let cwd = Self.cwd(ofPID: pid) else { continue }
+            if let card = store.card(withID: cardID), card.workingDirPath != cwd {
+                card.workingDirPath = cwd
+                changed = true
+            }
+        }
+        if changed { try? context.save() }
+    }
+
+    /// プロセスのカレントディレクトリをネイティブに取得。
+    nonisolated static func cwd(ofPID pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        let result = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size)
+        guard result > 0 else { return nil }
+        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw -> String in
+            guard let base = raw.baseAddress else { return "" }
+            return String(cString: base.assumingMemoryBound(to: CChar.self))
+        }
+        return path.isEmpty ? nil : path
     }
 
     private static func resolve(_ directory: String?) -> String {
