@@ -4,28 +4,46 @@ import AppKit
 import UniformTypeIdentifiers
 import KanbanKit
 
-/// Agent 状態 → 色/ラベル/アイコン/アニメ有無。レール・バッジで共有する。
+/// Prompt デザイン(Claude Design 案C)のトークン。
+/// カードは「机の上のターミナル窓」= システム外観に依らずダーク固定。
+enum PromptTheme {
+    static let surface = Color(hex: "171B1B")!   // カード地
+    static let text    = Color(hex: "CBCDD4")!   // 主テキスト
+    static let muted   = Color(hex: "6A7078")!   // 補助 / 記号
+    static let ok      = Color(hex: "7FD962")!   // 稼働 / 完了
+    static let blocked = Color(hex: "E54B4D")!   // 承認待ち(唯一の警告色)
+    static let mono    = Font.system(size: 12, design: .monospaced)
+}
+
+/// Agent 状態 → 先頭グリフ / タグ / 状態語 / 色。色は Blocked(赤)と 稼働・完了(緑)のみ、他は無彩色。
 struct AgentStatusStyle {
-    let label: String
-    let color: Color
-    let icon: String
-    let animate: Bool
+    let glyph: String     // ● ◐ ✓ ○
+    let tag: String       // BLOCKED / WORKING / DONE / IDLE / READY
+    let status: String    // タグ右の補助語(承認待ち / 未読 など)
+    let color: Color      // グリフ+タグの色
+    let spin: Bool        // WORKING グリフを回す
+    let showQuestion: Bool // Blocked のみ、実際の問い + 点滅キャレット行
 
     init(card: Card) {
         if card.isDone {
-            label = "Done"; color = .blue; icon = "checkmark.circle.fill"; animate = false
+            glyph = "✓"; tag = "DONE"; status = "未読"; color = PromptTheme.ok; spin = false; showQuestion = false
             return
         }
         switch card.agentState {
-        case .working: label = "Working"; color = .green;  icon = "arrow.triangle.2.circlepath"; animate = true
-        case .blocked: label = "Blocked"; color = .orange; icon = "hand.raised.fill";            animate = false
-        case .idle:    label = "Idle";    color = .gray;   icon = "pause.circle.fill";           animate = false
-        case .unknown: label = "—";       color = .gray;  icon = "terminal";                    animate = false
+        case .working:
+            glyph = "◐"; tag = "WORKING"; status = "";        color = PromptTheme.ok;      spin = true;  showQuestion = false
+        case .blocked:
+            glyph = "●"; tag = "BLOCKED"; status = "承認待ち"; color = PromptTheme.blocked; spin = false; showQuestion = true
+        case .idle:
+            glyph = "○"; tag = "IDLE";    status = "";        color = PromptTheme.muted;   spin = false; showQuestion = false
+        case .unknown:
+            glyph = "○"; tag = "READY";   status = "";        color = PromptTheme.muted;   spin = false; showQuestion = false
         }
     }
 }
 
-/// カードの見た目（ドラッグ中のオーバーレイでも再利用する非依存ビュー）
+/// カードの見た目(ドラッグ中のオーバーレイでも再利用する非依存ビュー)。
+/// 行構成: `● [TAG] 状態語` → タイトル → `cwd on branch ▸` → (Blockedのみ)`$ 問い ▏` → ターミナルを開く
 struct CardFace: View {
     let card: Card
     var showActions: Bool = false
@@ -33,102 +51,155 @@ struct CardFace: View {
     var onOpenTerminal: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 6) {
-                    Text(card.title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(2)
-                    Spacer(minLength: 4)
-                    AgentBadge(card: card)
-                    if showActions {
-                        Button(action: onEdit) {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("カード名を編集")
-                    }
-                }
+        let style = AgentStatusStyle(card: card)
+        let blocked = style.tag == "BLOCKED"
 
-                VStack(alignment: .leading, spacing: 5) {
-                    metaLine("folder", card.workingDirPath ?? "~/path/to/project", truncation: .head)
-                    if card.branch != nil || card.prURL != nil {
-                        HStack(spacing: 8) {
-                            if let branch = card.branch {
-                                metaLine("arrow.triangle.branch", branch, truncation: .tail)
-                            }
-                            Spacer(minLength: 4)
-                            if let pr = card.prURL, let url = URL(string: pr) {
-                                Button { NSWorkspace.shared.open(url) } label: {
-                                    HStack(spacing: 3) {
-                                        Image(systemName: "arrow.up.forward.square")
-                                        Text("PR")
-                                    }
-                                    .font(.caption2.weight(.semibold))
-                                }
-                                .buttonStyle(.borderless)
-                                .foregroundStyle(.blue)
-                                .help(pr)
-                            }
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            // 状態行
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                StatusGlyph(glyph: style.glyph, color: style.color, spin: style.spin)
+                Text("[\(style.tag)]").foregroundStyle(style.color)
+                if !style.status.isEmpty {
+                    Text(style.status).foregroundStyle(PromptTheme.muted)
                 }
-
+                Spacer(minLength: 4)
                 if showActions {
-                    Button(action: onOpenTerminal) {
-                        Label("ターミナルを開く", systemImage: "terminal.fill")
-                            .font(.callout.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .help("ターミナルを開く")
+                    Button(action: onEdit) { Image(systemName: "pencil") }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(PromptTheme.muted)
+                        .help("カード名を編集")
                 }
+            }
+            .font(PromptTheme.mono.weight(.semibold))
+
+            // タイトル(唯一の自由入力 = 唯一のプロポーショナル体)
+            Text(card.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(PromptTheme.text)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // プロンプト行: cwd on branch ▸   (右端に PR 番号)
+            promptLine
+
+            // Blocked: Agent の実際の問い + 点滅キャレット(カード内で動くのはここだけ)
+            if style.showQuestion {
+                HStack(spacing: 0) {
+                    Text("$ ").foregroundStyle(PromptTheme.muted)
+                    Text(blockedQuestion)
+                        .foregroundStyle(PromptTheme.blocked)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    BlinkingCaret().foregroundStyle(PromptTheme.blocked)
+                }
+                .font(PromptTheme.mono)
+            }
+
+            if showActions {
+                Button(action: onOpenTerminal) {
+                    HStack(spacing: 6) {
+                        Text("▸").font(PromptTheme.mono.weight(.bold))
+                        Text("ターミナルを開く").font(.system(size: 12, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(PromptTheme.text)
+                    .background(PromptTheme.text.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(PromptTheme.text.opacity(0.14)))
+                }
+                .buttonStyle(.plain)
+                .help("ターミナルを開く")
+            }
         }
         .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(PromptTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(blocked ? PromptTheme.blocked.opacity(0.55) : Color.white.opacity(0.08),
+                        lineWidth: 1)
         )
     }
 
-    private func metaLine(_ systemImage: String, _ text: String, truncation: Text.TruncationMode) -> some View {
+    /// `cwd on branch ▸` + 右端 PR 番号。方向記号は ▸ に統一(CHANEL)。
+    private var promptLine: some View {
         HStack(spacing: 4) {
-            Image(systemName: systemImage).font(.caption2)
-            Text(text).font(.system(.caption2, design: .monospaced))
+            Text(dirName).foregroundStyle(PromptTheme.text)
+            if let branch = card.branch {
+                Text("on").foregroundStyle(PromptTheme.muted)
+                Text(branch)
+                    .foregroundStyle(PromptTheme.ok.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Text("▸").foregroundStyle(PromptTheme.muted)
+            Spacer(minLength: 4)
+            if let pr = card.prURL, let url = URL(string: pr), let num = prNumber {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    Text(num).foregroundStyle(PromptTheme.text.opacity(0.75))
+                }
+                .buttonStyle(.plain)
+                .help(pr)
+            }
         }
-        .foregroundStyle(.secondary)
+        .font(PromptTheme.mono)
         .lineLimit(1)
-        .truncationMode(truncation)
+        .help(card.workingDirPath ?? "")
+    }
+
+    /// cwd の末尾ディレクトリ名(プロンプトのカレント表示)。
+    private var dirName: String {
+        guard let p = card.workingDirPath, !p.isEmpty else { return "~" }
+        let last = (p as NSString).lastPathComponent
+        return last.isEmpty ? "~" : last
+    }
+
+    /// PR URL 末尾の番号を "#827" 形式で。
+    private var prNumber: String? {
+        guard let pr = card.prURL,
+              let last = pr.split(separator: "/").last,
+              !last.isEmpty else { return nil }
+        return "#\(last)"
+    }
+
+    private var blockedQuestion: String {
+        if let q = card.blockedPrompt, !q.isEmpty { return q }
+        return "承認待ち — 応答が必要"
     }
 }
 
-struct AgentBadge: View {
-    let card: Card
-    @State private var spin = false
+/// 状態グリフ。WORKING は ◐ をゆっくり回転。
+struct StatusGlyph: View {
+    let glyph: String
+    let color: Color
+    let spin: Bool
+    @State private var angle = 0.0
 
     var body: some View {
-        let s = AgentStatusStyle(card: card)
-        HStack(spacing: 4) {
-            Image(systemName: s.icon)
-                .rotationEffect(.degrees(s.animate && spin ? 360 : 0))
-                .animation(
-                    s.animate ? .linear(duration: 1.4).repeatForever(autoreverses: false) : .default,
-                    value: spin
-                )
-            Text(s.label)
-        }
-        .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(s.color.opacity(0.18), in: Capsule())
-        .foregroundStyle(s.color)
-        .onAppear { if s.animate { spin = true } }
-        .onChange(of: card.agentStateRaw) { _, _ in
-            spin = AgentStatusStyle(card: card).animate
-        }
+        Text(glyph)
+            .foregroundStyle(color)
+            .rotationEffect(.degrees(spin ? angle : 0))
+            .onAppear {
+                if spin {
+                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                        angle = 360
+                    }
+                }
+            }
+    }
+}
+
+/// ターミナル風の点滅キャレット。
+struct BlinkingCaret: View {
+    @State private var on = true
+    var body: some View {
+        Text("▏")
+            .opacity(on ? 1 : 0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                    on = false
+                }
+            }
     }
 }
 

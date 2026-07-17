@@ -37,24 +37,38 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     func rescan() {
         guard let t = term?.getTerminal() else { return }
         let rows = t.rows
-        var text = ""
+        var lines: [String] = []
         for r in max(0, rows - 20)..<rows {
             if let line = t.getLine(row: r) {
-                text += line.translateToString(trimRight: true) + "\n"
+                lines.append(line.translateToString(trimRight: true))
             }
         }
-        let lower = text.lowercased()
+        let lower = lines.joined(separator: "\n").lowercased()
         let state: AgentState
+        var question: String? = nil
         if lower.contains("esc to interrupt") {
             state = .working                                     // Claude 実行中フッタ
         } else if lower.contains("do you want")
                     || lower.contains("esc to cancel")
                     || lower.contains("enter to select") {
             state = .blocked                                     // 承認/選択プロンプト
+            question = Self.extractQuestion(from: lines)         // 実際の問いをカードに出す(design C)
         } else {
             state = .idle
         }
-        apply(state)
+        apply(state, question: question)
+    }
+
+    /// 承認ボックスの問い(例: "Do you want to make this edit?")を1行取り出す。罫線・記号は除去。
+    private static func extractQuestion(from lines: [String]) -> String? {
+        let frame = CharacterSet(charactersIn: " │╭╮╰╯─┃┏┓┗┛┌┐└┘|>❯•*")
+        for line in lines {
+            let cleaned = line.trimmingCharacters(in: frame).trimmingCharacters(in: .whitespaces)
+            if cleaned.lowercased().contains("do you want") {
+                return String(cleaned.prefix(80))
+            }
+        }
+        return nil
     }
 
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
@@ -70,7 +84,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         apply(.idle)
     }
 
-    private func apply(_ state: AgentState) {
+    private func apply(_ state: AgentState, question: String? = nil) {
         guard let card = BoardStore(context: context).card(withID: cardID) else { return }
         var changed = false
         if isViewing() {
@@ -79,6 +93,12 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
             if card.seen { card.seen = false; changed = true }   // 別画面にいる間に完了 → Done(未読)
         }
         if card.agentState != state { card.agentState = state; changed = true }
+        // Blocked の実際の問いを保存 / 解除。抽出できなければ直前の問いを保持する。
+        if state == .blocked {
+            if let q = question, card.blockedPrompt != q { card.blockedPrompt = q; changed = true }
+        } else if card.blockedPrompt != nil {
+            card.blockedPrompt = nil; changed = true
+        }
         lastState = state
         if changed { try? context.save() }
     }
