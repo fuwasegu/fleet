@@ -69,8 +69,6 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 final class TerminalSessions {
     private var views: [UUID: LocalProcessTerminalView] = [:]
     private var monitors: [UUID: AgentStateMonitor] = [:]   // processDelegate は weak なので保持する
-    private var context: ModelContext?
-    private var cwdPollTask: Task<Void, Never>?
 
     func view(for cardID: UUID,
               directory: String?,
@@ -78,8 +76,6 @@ final class TerminalSessions {
               dangerSkip: Bool,
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
-        self.context = context
-        startCwdPollingIfNeeded()
         if let existing = views[cardID] { return existing }
         let term = LocalProcessTerminalView(frame: .zero)
 
@@ -119,31 +115,17 @@ final class TerminalSessions {
         monitors[cardID] = nil
     }
 
-    // MARK: - cwd の追従 (OSC7 は既定で来ないので、シェルの cwd をネイティブに定期取得)
+    // MARK: - cwd の追従 (OSC7 は既定で来ないので、閉じる時にシェルの cwd をネイティブ取得)
 
-    private func startCwdPollingIfNeeded() {
-        guard cwdPollTask == nil else { return }
-        cwdPollTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                self?.pollCwds()
-            }
+    /// ターミナルを閉じる時に呼ぶ。カードの表示パスを現在のシェル cwd に更新する。
+    func refreshCwd(for cardID: UUID, context: ModelContext) {
+        guard let term = views[cardID] else { return }
+        let pid = term.process.shellPid
+        guard pid > 0, let cwd = Self.cwd(ofPID: pid) else { return }
+        if let card = BoardStore(context: context).card(withID: cardID), card.workingDirPath != cwd {
+            card.workingDirPath = cwd
+            try? context.save()
         }
-    }
-
-    private func pollCwds() {
-        guard let context else { return }
-        let store = BoardStore(context: context)
-        var changed = false
-        for (cardID, term) in views {
-            let pid = term.process.shellPid
-            guard pid > 0, let cwd = Self.cwd(ofPID: pid) else { continue }
-            if let card = store.card(withID: cardID), card.workingDirPath != cwd {
-                card.workingDirPath = cwd
-                changed = true
-            }
-        }
-        if changed { try? context.save() }
     }
 
     /// プロセスのカレントディレクトリをネイティブに取得。

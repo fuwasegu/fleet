@@ -54,7 +54,7 @@ struct BoardView: View {
                 Rectangle()
                     .fill(.black.opacity(0.4))
                     .ignoresSafeArea()
-                    .onTapGesture { uiState.terminalCardID = nil }
+                    .onTapGesture { closeTerminal() }
 
                 VStack(spacing: 0) {
                     HStack(spacing: 6) {
@@ -64,7 +64,7 @@ struct BoardView: View {
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                         Spacer()
                         Button {
-                            uiState.terminalCardID = nil
+                            closeTerminal()
                         } label: {
                             Image(systemName: "xmark.circle.fill").font(.title3)
                         }
@@ -90,9 +90,17 @@ struct BoardView: View {
                 .shadow(radius: 30)
                 .padding(24)   // ほぼ全画面（周囲だけ余白 = 暗幕クリックで閉じられる）
             }
-            .onExitCommand { uiState.terminalCardID = nil }
+            .onExitCommand { closeTerminal() }
             .transition(.opacity)
         }
+    }
+
+    /// ターミナルを閉じる。閉じる直前に cwd をカードへ反映する。
+    private func closeTerminal() {
+        if let id = uiState.terminalCardID {
+            sessions.refreshCwd(for: id, context: context)
+        }
+        uiState.terminalCardID = nil
     }
 
     /// ドラッグ中のカードをカーソルに追従表示（元カードは opacity で隠す）
