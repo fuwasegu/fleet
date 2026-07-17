@@ -20,7 +20,7 @@ struct AgentStatusStyle {
         case .working: label = "Working"; color = .green;  icon = "arrow.triangle.2.circlepath"; animate = true
         case .blocked: label = "Blocked"; color = .orange; icon = "hand.raised.fill";            animate = false
         case .idle:    label = "Idle";    color = .gray;   icon = "pause.circle.fill";           animate = false
-        case .unknown: label = "待機なし"; color = .gray;  icon = "terminal";                    animate = false
+        case .unknown: label = "—";       color = .gray;  icon = "terminal";                    animate = false
         }
     }
 }
@@ -32,16 +32,8 @@ struct CardFace: View {
     var onEdit: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
 
-    private var status: AgentStatusStyle { AgentStatusStyle(card: card) }
-
     var body: some View {
-        HStack(spacing: 0) {
-            // シグネチャ: Agent状態のステータスレール（壁一面で状態を一目スキャン）
-            Rectangle()
-                .fill(status.color)
-                .frame(width: 4)
-
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 6) {
                     Text(card.title)
                         .font(.system(size: 15, weight: .semibold))
@@ -93,15 +85,13 @@ struct CardFace: View {
                     .controlSize(.regular)
                     .help("ターミナルを開く")
                 }
-            }
-            .padding(12)
         }
+        .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(status.color.opacity(0.25), lineWidth: 1)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func metaLine(_ systemImage: String, _ text: String, truncation: Text.TruncationMode) -> some View {

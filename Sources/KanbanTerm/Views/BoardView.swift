@@ -211,6 +211,7 @@ struct BoardView: View {
            let card = BoardStore(context: context).card(withID: id) {
             CardFace(card: card)
                 .frame(width: 256)
+                .fixedSize(horizontal: false, vertical: true)   // 内容の高さにフィット(縦伸び防止)
                 .opacity(0.95)
                 .shadow(radius: 10, y: 6)
                 .position(loc)
