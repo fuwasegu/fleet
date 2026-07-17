@@ -87,6 +87,7 @@ struct CardView: View {
 
     @State private var renaming = false
     @State private var draft = ""
+    @State private var confirmingDelete = false
 
     var body: some View {
         CardFace(
@@ -110,7 +111,7 @@ struct CardView: View {
                     Label("名前を変更", systemImage: "pencil")
                 }
                 Divider()
-                Button(role: .destructive, action: deleteCard) {
+                Button(role: .destructive) { confirmingDelete = true } label: {
                     Label("カードを削除", systemImage: "trash")
                 }
             }
@@ -118,6 +119,12 @@ struct CardView: View {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
                 }
+            }
+            .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
+                Button("削除", role: .destructive, action: deleteCard)
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("「\(card.title)」を削除します。起動中のターミナル/Agent も終了します。")
             }
     }
 
