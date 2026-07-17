@@ -37,7 +37,7 @@ enum ColumnPalette {
     ]
 }
 
-/// カード上にホバーした時、そのカードの位置へドラッグ中カードをライブ移動（ヌルッと並び替え）
+/// カード上にホバーした時、方向を考慮してライブ移動（上→下・下→上の双方向で並び替え）
 struct CardDropDelegate: DropDelegate {
     let target: Card
     let column: BoardColumn
@@ -51,12 +51,22 @@ struct CardDropDelegate: DropDelegate {
             guard let dragID = uiState.draggingCardID, dragID != target.id else { return }
             let store = BoardStore(context: context)
             guard let dragged = store.card(withID: dragID) else { return }
-            let cards = column.cards
-                .filter { $0.id != dragID }
-                .sorted { $0.order < $1.order }
-            let index = cards.firstIndex(where: { $0.id == target.id }) ?? cards.count
+
+            let full = column.cards.sorted { $0.order < $1.order }
+            let filtered = full.filter { $0.id != dragID }
+            guard let base = filtered.firstIndex(where: { $0.id == target.id }) else { return }
+
+            // 同一列内: ドラッグ中カードが対象より上にいれば対象の「後ろ」、下なら「前」へ。
+            // 別列からの流入: dragged はこの列に居ないので対象の「前」に挿入。
+            let insertIndex: Int
+            if let from = full.firstIndex(where: { $0.id == dragID }),
+               let to = full.firstIndex(where: { $0.id == target.id }) {
+                insertIndex = to > from ? base + 1 : base
+            } else {
+                insertIndex = base
+            }
             withAnimation(.snappy(duration: 0.22)) {
-                try? store.moveCard(dragged, to: column, at: index)
+                try? store.moveCard(dragged, to: column, at: insertIndex)
             }
         }
     }
@@ -67,7 +77,8 @@ struct CardDropDelegate: DropDelegate {
     }
 }
 
-/// 列の空き領域へドロップ → その列の末尾へ移動
+/// 列のカード以外の領域へドロップ → その列の末尾へ移動（同一列の最下部移動 / 空列への流入）。
+/// ライブ移動は各カードの delegate が担うため、ここは drop 確定時のみ処理する。
 struct ColumnDropDelegate: DropDelegate {
     let column: BoardColumn
     let context: ModelContext
@@ -75,21 +86,17 @@ struct ColumnDropDelegate: DropDelegate {
 
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
 
-    func dropEntered(info: DropInfo) {
+    func performDrop(info: DropInfo) -> Bool {
         MainActor.assumeIsolated {
+            defer { uiState.draggingCardID = nil }
             guard let dragID = uiState.draggingCardID else { return }
             let store = BoardStore(context: context)
             guard let dragged = store.card(withID: dragID) else { return }
-            if dragged.column?.persistentModelID != column.persistentModelID {
-                withAnimation(.snappy(duration: 0.22)) {
-                    try? store.moveCard(dragged, to: column, at: column.cards.count)
-                }
+            let end = column.cards.filter { $0.id != dragID }.count
+            withAnimation(.snappy(duration: 0.22)) {
+                try? store.moveCard(dragged, to: column, at: end)
             }
         }
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        MainActor.assumeIsolated { uiState.draggingCardID = nil }
         return true
     }
 }

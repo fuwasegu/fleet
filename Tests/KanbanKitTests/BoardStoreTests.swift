@@ -139,6 +139,19 @@ struct BoardStoreTests {
         #expect(store.card(withID: UUID()) == nil)
     }
 
+    // 先頭カードを最下部へ（上→下の並べ替えが store 層で成立すること）
+    @Test func moveCardTopToBottom() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c0 = try store.addCard(title: "0", to: a)
+        _ = try store.addCard(title: "1", to: a)
+        _ = try store.addCard(title: "2", to: a)
+        let end = a.cards.filter { $0.id != c0.id }.count   // = 2
+        try store.moveCard(c0, to: a, at: end)
+        let titles = a.cards.sorted { $0.order < $1.order }.map(\.title)
+        #expect(titles == ["1", "2", "0"])
+    }
+
     @Test func deleteCardNormalizesOrders() throws {
         let store = try makeStore()
         let a = try store.addColumn(name: "A")
