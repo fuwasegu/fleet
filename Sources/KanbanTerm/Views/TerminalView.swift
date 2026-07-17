@@ -95,6 +95,7 @@ final class TerminalSessions {
               directory: String?,
               startAgent: Bool,
               dangerSkip: Bool,
+              resume: Bool = false,
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
@@ -119,8 +120,8 @@ final class TerminalSessions {
             currentDirectory: Self.resolve(directory)
         )
         if startAgent {
-            let danger = dangerSkip ? " --dangerously-skip-permissions" : ""
-            let bytes = ArraySlice(Array("claude\(danger)\n".utf8))
+            let flags = (resume ? " --continue" : "") + (dangerSkip ? " --dangerously-skip-permissions" : "")
+            let bytes = ArraySlice(Array("claude\(flags)\n".utf8))
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(700))
                 term.send(source: term, data: bytes)
