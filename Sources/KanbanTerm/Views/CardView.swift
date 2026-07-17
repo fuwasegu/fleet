@@ -50,6 +50,8 @@ struct CardFace: View {
     var onEdit: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
 
+    @State private var showPromptTip = false
+
     var body: some View {
         let style = AgentStatusStyle(card: card)
         let blocked = style.tag == "BLOCKED"
@@ -122,7 +124,8 @@ struct CardFace: View {
     }
 
     /// `cwd on branch ▸` + 右端 PR 番号。方向記号は ▸ に統一(CHANEL)。
-    /// 切り詰められても、行全体のホバーで cwd フルパス + branch 全文を tooltip で見せる。
+    /// 切り詰められても、行全体のホバーで cwd フルパス + branch 全文を自前 tooltip で見せる。
+    /// (SwiftUI 標準の .help() はカード全体の DragGesture と競合して発火しないため onHover 方式)
     private var promptLine: some View {
         HStack(spacing: 4) {
             Text(dirName).foregroundStyle(PromptTheme.text)
@@ -140,20 +143,47 @@ struct CardFace: View {
                     Text(num).foregroundStyle(PromptTheme.text.opacity(0.75))
                 }
                 .buttonStyle(.plain)
-                .help(pr)
             }
         }
         .font(PromptTheme.mono)
         .lineLimit(1)
         .contentShape(Rectangle())
-        .help(promptHelp)
+        .onHover { hovering in
+            guard showActions, !promptHelp.isEmpty else { return }
+            withAnimation(.easeInOut(duration: 0.1)) { showPromptTip = hovering }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if showPromptTip {
+                promptTooltip
+                    .offset(y: 8)          // プロンプト行の直下に浮かせる
+                    .zIndex(10)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
     }
 
-    /// プロンプト行のホバー tooltip: cwd フルパス + ブランチ全文。
+    /// 自前ツールチップ(ダーク・等幅、ターミナル調)。cwd フルパス + ブランチ全文。
+    private var promptTooltip: some View {
+        Text(promptHelp)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(PromptTheme.text)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 232, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(hex: "0E0F11")!, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.14)))
+            .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
+    }
+
+    /// プロンプト行のホバー tooltip: cwd フルパス + ブランチ全文 + PR URL。
     private var promptHelp: String {
         var lines: [String] = []
         if let p = card.workingDirPath, !p.isEmpty { lines.append(p) }
         if let b = card.branch { lines.append("⎇ \(b)") }
+        if let pr = card.prURL, !pr.isEmpty { lines.append(pr) }
         return lines.joined(separator: "\n")
     }
 
