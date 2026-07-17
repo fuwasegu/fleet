@@ -82,6 +82,11 @@ public struct BoardStore {
         try context.save()
     }
 
+    public func setCardDirectory(_ card: Card, path: String?) throws {
+        card.workingDirPath = path
+        try context.save()
+    }
+
     public func card(withID id: UUID) -> Card? {
         let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
         return try? context.fetch(descriptor).first

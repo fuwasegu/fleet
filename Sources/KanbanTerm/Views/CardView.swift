@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 import KanbanKit
 
 /// カードの見た目（ドラッグ中のオーバーレイでも再利用する非依存ビュー）
@@ -92,6 +93,7 @@ struct CardView: View {
     @State private var renaming = false
     @State private var draft = ""
     @State private var confirmingDelete = false
+    @State private var changingDir = false
 
     var body: some View {
         CardFace(
@@ -114,6 +116,9 @@ struct CardView: View {
                 Button(action: beginRename) {
                     Label("名前を変更", systemImage: "pencil")
                 }
+                Button { changingDir = true } label: {
+                    Label("作業ディレクトリを変更…", systemImage: "folder")
+                }
                 Divider()
                 Button(role: .destructive) { confirmingDelete = true } label: {
                     Label("カードを削除", systemImage: "trash")
@@ -129,6 +134,11 @@ struct CardView: View {
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("「\(card.title)」を削除します。起動中のターミナル/Agent も終了します。")
+            }
+            .fileImporter(isPresented: $changingDir, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result {
+                    try? BoardStore(context: context).setCardDirectory(card, path: url.path)
+                }
             }
     }
 
