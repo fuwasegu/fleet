@@ -112,7 +112,10 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 /// dataReceived をフックし、出力が落ち着いた頃(250ms デバウンス)にバッファ走査(状態判定)を行う端末view。
 final class MonitoredTerminalView: LocalProcessTerminalView {
     var onScan: (() -> Void)?
+    var onReady: (() -> Void)?   // シェルの初回出力(プロンプト)が落ち着いたら1回だけ呼ぶ
     private var scanTask: Task<Void, Never>?
+    private var readyTask: Task<Void, Never>?
+    private var readyFired = false
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
@@ -121,6 +124,17 @@ final class MonitoredTerminalView: LocalProcessTerminalView {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             self?.onScan?()
+        }
+        // 初回プロンプトが描画され落ち着いたタイミングを検知して onReady を1回だけ発火。
+        // (Agent 自動起動を固定ディレイでなくプロンプト準備完了に合わせるため)
+        if !readyFired {
+            readyTask?.cancel()
+            readyTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, let self, !self.readyFired else { return }
+                self.readyFired = true
+                self.onReady?()
+            }
         }
     }
 }
@@ -166,10 +180,8 @@ final class TerminalSessions {
         if startAgent {
             let flags = (resume ? " --continue" : "") + (dangerSkip ? " --dangerously-skip-permissions" : "")
             let bytes = ArraySlice(Array("claude\(flags)\n".utf8))
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(700))
-                term.send(source: term, data: bytes)
-            }
+            // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
+            term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
         }
         views[cardID] = term
         return term
