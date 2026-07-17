@@ -98,6 +98,19 @@ public struct BoardStore {
         try context.save()
     }
 
+    /// アプリ起動時に呼ぶ。端末セッションはプロセスと共に消えるため、全カードを
+    /// 「CC 未起動」状態(unknown / 既読 / 問いなし)にリセットして、表示と実体の齟齬を防ぐ。
+    public func resetAgentStates() throws {
+        let cards = try context.fetch(FetchDescriptor<Card>())
+        var changed = false
+        for card in cards {
+            if card.agentState != .unknown { card.agentState = .unknown; changed = true }
+            if !card.seen { card.seen = true; changed = true }
+            if card.blockedPrompt != nil { card.blockedPrompt = nil; changed = true }
+        }
+        if changed { try context.save() }
+    }
+
     public func card(withID id: UUID) -> Card? {
         let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
         return try? context.fetch(descriptor).first

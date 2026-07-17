@@ -122,19 +122,16 @@ struct CardFace: View {
     }
 
     /// `cwd on branch ▸` + 右端 PR 番号。方向記号は ▸ に統一(CHANEL)。
-    /// 切り詰められても、cwd はフルパス・branch は全文をホバーの tooltip で見せる。
+    /// 切り詰められても、行全体のホバーで cwd フルパス + branch 全文を tooltip で見せる。
     private var promptLine: some View {
         HStack(spacing: 4) {
-            Text(dirName)
-                .foregroundStyle(PromptTheme.text)
-                .help(card.workingDirPath ?? dirName)
+            Text(dirName).foregroundStyle(PromptTheme.text)
             if let branch = card.branch {
                 Text("on").foregroundStyle(PromptTheme.muted)
                 Text(branch)
                     .foregroundStyle(PromptTheme.ok.opacity(0.9))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(branch)
             }
             Text("▸").foregroundStyle(PromptTheme.muted)
             Spacer(minLength: 4)
@@ -148,6 +145,16 @@ struct CardFace: View {
         }
         .font(PromptTheme.mono)
         .lineLimit(1)
+        .contentShape(Rectangle())
+        .help(promptHelp)
+    }
+
+    /// プロンプト行のホバー tooltip: cwd フルパス + ブランチ全文。
+    private var promptHelp: String {
+        var lines: [String] = []
+        if let p = card.workingDirPath, !p.isEmpty { lines.append(p) }
+        if let b = card.branch { lines.append("⎇ \(b)") }
+        return lines.joined(separator: "\n")
     }
 
     /// cwd の末尾ディレクトリ名(プロンプトのカレント表示)。

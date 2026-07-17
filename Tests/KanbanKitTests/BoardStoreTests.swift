@@ -171,6 +171,27 @@ struct BoardStoreTests {
         #expect(titles == ["1", "2", "0"])
     }
 
+    // アプリ起動時: 端末は消えているので全カードを CC 未起動状態へ戻す
+    @Test func resetAgentStatesClearsRuntimeState() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let working = try store.addCard(title: "w", to: a)
+        working.agentState = .working
+        let blocked = try store.addCard(title: "b", to: a)
+        blocked.agentState = .blocked
+        blocked.seen = false
+        blocked.blockedPrompt = "Do you want to proceed?"
+
+        try store.resetAgentStates()
+
+        for card in a.cards {
+            #expect(card.agentState == .unknown)
+            #expect(card.seen == true)
+            #expect(card.blockedPrompt == nil)
+            #expect(card.isDone == false)
+        }
+    }
+
     @Test func deleteCardNormalizesOrders() throws {
         let store = try makeStore()
         let a = try store.addColumn(name: "A")

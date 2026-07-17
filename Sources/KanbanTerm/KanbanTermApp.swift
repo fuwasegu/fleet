@@ -12,6 +12,10 @@ struct KanbanTermApp: App {
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
+        // 起動時: 端末セッションは消えているので、全カードを CC 未起動状態にリセットする。
+        MainActor.assumeIsolated {
+            try? BoardStore(context: container.mainContext).resetAgentStates()
+        }
     }
 
     var body: some Scene {
