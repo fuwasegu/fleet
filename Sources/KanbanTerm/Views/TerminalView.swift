@@ -142,6 +142,7 @@ final class TerminalSessions {
         if let existing = views[cardID] { return existing }
         let term = MonitoredTerminalView(frame: .zero)
         term.font = TerminalSettings.resolvedFont()   // 設定フォントを適用
+        Self.applyTheme(TerminalSettings.resolvedTheme(), to: term)
 
         let monitor = AgentStateMonitor(
             cardID: cardID,
@@ -178,6 +179,18 @@ final class TerminalSessions {
     func applyFont() {
         let font = TerminalSettings.resolvedFont()
         for term in views.values { term.font = font }
+    }
+
+    /// 配色テーマを開いている全ターミナルへ即時反映する。
+    func applyTheme() {
+        let theme = TerminalSettings.resolvedTheme()
+        for term in views.values { Self.applyTheme(theme, to: term) }
+    }
+
+    private static func applyTheme(_ theme: TermTheme, to term: LocalProcessTerminalView) {
+        term.nativeBackgroundColor = NSColor(hex: theme.bg)
+        term.nativeForegroundColor = NSColor(hex: theme.fg)
+        term.caretColor = NSColor(hex: theme.caret)
     }
 
     /// カード削除時などにセッションを終了する(SIGTERM)。
