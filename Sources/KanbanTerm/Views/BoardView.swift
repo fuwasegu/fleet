@@ -38,6 +38,7 @@ struct BoardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .coordinateSpace(.named("board"))
         .overlay(alignment: .topLeading) { draggedOverlay }
+        .overlay(alignment: .topLeading) { tooltipOverlay }
         .overlay { terminalOverlay }
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
         .navigationTitle("KANBAN Term")
@@ -201,6 +202,24 @@ struct BoardView: View {
             if let card = BoardStore(context: context).card(withID: cardID) {
                 try? BoardStore(context: context).setCardGitInfo(card, branch: info.0, prURL: info.1)
             }
+        }
+    }
+
+    /// プロンプト行ホバー時の tooltip。列のクリップを受けないよう最上位で、カーソル付近に浮かせる。
+    @ViewBuilder private var tooltipOverlay: some View {
+        if let text = uiState.tooltipText, let anchor = uiState.tooltipAnchor,
+           !text.isEmpty, uiState.draggingCardID == nil, uiState.terminalCardID == nil {
+            GeometryReader { geo in
+                let lines = text.split(separator: "\n")
+                let longest = lines.map(\.count).max() ?? 0
+                let estWidth = CGFloat(longest) * 6.9 + 24
+                let estHeight = CGFloat(lines.count) * 15 + 16
+                let x = min(max(12, anchor.x + 14), max(12, geo.size.width - estWidth - 12))
+                let y = min(anchor.y + 18, max(12, geo.size.height - estHeight - 12))
+                PromptTooltip(text: text)
+                    .offset(x: x, y: y)
+            }
+            .allowsHitTesting(false)
         }
     }
 

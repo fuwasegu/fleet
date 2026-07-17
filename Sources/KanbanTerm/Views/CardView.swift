@@ -49,8 +49,8 @@ struct CardFace: View {
     var showActions: Bool = false
     var onEdit: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
-
-    @State private var showPromptTip = false
+    /// プロンプト行のホバー。active は "board" 座標のカーソル位置、nil で解除。
+    var onPromptHover: (CGPoint?) -> Void = { _ in }
 
     var body: some View {
         let style = AgentStatusStyle(card: card)
@@ -148,43 +148,13 @@ struct CardFace: View {
         .font(PromptTheme.mono)
         .lineLimit(1)
         .contentShape(Rectangle())
-        .onHover { hovering in
-            guard showActions, !promptHelp.isEmpty else { return }
-            withAnimation(.easeInOut(duration: 0.1)) { showPromptTip = hovering }
-        }
-        .overlay(alignment: .bottomLeading) {
-            if showPromptTip {
-                promptTooltip
-                    .offset(y: 8)          // プロンプト行の直下に浮かせる
-                    .zIndex(10)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+        .onContinuousHover(coordinateSpace: .named("board")) { phase in
+            guard showActions, !card.promptTooltipText.isEmpty else { return }
+            switch phase {
+            case .active(let location): onPromptHover(location)
+            case .ended:                onPromptHover(nil)
             }
         }
-    }
-
-    /// 自前ツールチップ(ダーク・等幅、ターミナル調)。cwd フルパス + ブランチ全文。
-    private var promptTooltip: some View {
-        Text(promptHelp)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(PromptTheme.text)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 232, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color(hex: "0E0F11")!, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.14)))
-            .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
-    }
-
-    /// プロンプト行のホバー tooltip: cwd フルパス + ブランチ全文 + PR URL。
-    private var promptHelp: String {
-        var lines: [String] = []
-        if let p = card.workingDirPath, !p.isEmpty { lines.append(p) }
-        if let b = card.branch { lines.append("⎇ \(b)") }
-        if let pr = card.prURL, !pr.isEmpty { lines.append(pr) }
-        return lines.joined(separator: "\n")
     }
 
     /// cwd の末尾ディレクトリ名(プロンプトのカレント表示)。
@@ -229,6 +199,34 @@ struct StatusGlyph: View {
     }
 }
 
+extension Card {
+    /// プロンプト行ホバー時の tooltip 本文: cwd フルパス + ブランチ全文 + PR URL(各1行)。
+    var promptTooltipText: String {
+        var lines: [String] = []
+        if let p = workingDirPath, !p.isEmpty { lines.append(p) }
+        if let b = branch { lines.append("⎇ \(b)") }
+        if let pr = prURL, !pr.isEmpty { lines.append(pr) }
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// ボード最上位に浮かせる自前ツールチップ(ダーク・等幅、折り返しなし)。
+struct PromptTooltip: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(PromptTheme.text)
+            .lineLimit(nil)
+            .fixedSize()                       // 折り返さず内容幅にフィット
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(Color(hex: "0E0F11")!, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.16)))
+            .shadow(color: .black.opacity(0.55), radius: 10, y: 4)
+    }
+}
+
 /// ターミナル風の点滅キャレット。
 struct BlinkingCaret: View {
     @State private var on = true
@@ -261,7 +259,16 @@ struct CardView: View {
             card: card,
             showActions: true,
             onEdit: beginRename,
-            onOpenTerminal: { uiState.terminalCardID = card.id }
+            onOpenTerminal: { uiState.terminalCardID = card.id },
+            onPromptHover: { location in
+                if let location {
+                    uiState.tooltipText = card.promptTooltipText
+                    uiState.tooltipAnchor = location
+                } else if uiState.tooltipText == card.promptTooltipText {
+                    uiState.tooltipText = nil
+                    uiState.tooltipAnchor = nil
+                }
+            }
         )
             .opacity(isDragging ? 0.05 : 1)
             .onGeometryChange(for: CGRect.self) {
