@@ -185,19 +185,21 @@ struct BoardView: View {
     private func closeTerminal() {
         if let id = uiState.terminalCardID {
             sessions.refreshCwd(for: id, context: context)
-            fetchPR(for: id)
+            fetchGitInfo(for: id)
         }
         uiState.previewURL = nil        // fsl: Terminal を閉じるとプレビューも閉じる
         uiState.terminalCardID = nil
     }
 
-    /// 現在ブランチの PR URL を gh で取得してカードに反映する(取得はバックグラウンド)。
-    private func fetchPR(for cardID: UUID) {
+    /// 現在ブランチと PR URL を git/gh で取得してカードに反映する(取得はバックグラウンド)。
+    private func fetchGitInfo(for cardID: UUID) {
         guard let cwd = BoardStore(context: context).card(withID: cardID)?.workingDirPath else { return }
         Task {
-            let url = await Task.detached { GitHubService.prURL(cwd: cwd) }.value
+            let info = await Task.detached { () -> (String?, String?) in
+                (GitHubService.branch(cwd: cwd), GitHubService.prURL(cwd: cwd))
+            }.value
             if let card = BoardStore(context: context).card(withID: cardID) {
-                try? BoardStore(context: context).setCardPR(card, url: url)
+                try? BoardStore(context: context).setCardGitInfo(card, branch: info.0, prURL: info.1)
             }
         }
     }

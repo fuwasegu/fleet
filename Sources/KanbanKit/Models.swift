@@ -44,6 +44,7 @@ public final class Card {
     public var autoStartAgent: Bool = false    // カードのターミナル初回起動時に Claude を自動起動するか
     public var seen: Bool = true
     public var prURL: String? = nil            // 現在ブランチに紐づく GitHub PR の URL (gh 由来)
+    public var branch: String? = nil           // 現在の git ブランチ名
 
     public init(id: UUID = UUID(),
                 title: String,

@@ -4,6 +4,27 @@ import AppKit
 import UniformTypeIdentifiers
 import KanbanKit
 
+/// Agent 状態 → 色/ラベル/アイコン/アニメ有無。レール・バッジで共有する。
+struct AgentStatusStyle {
+    let label: String
+    let color: Color
+    let icon: String
+    let animate: Bool
+
+    init(card: Card) {
+        if card.isDone {
+            label = "Done"; color = .blue; icon = "checkmark.circle.fill"; animate = false
+            return
+        }
+        switch card.agentState {
+        case .working: label = "Working"; color = .green;  icon = "arrow.triangle.2.circlepath"; animate = true
+        case .blocked: label = "Blocked"; color = .orange; icon = "hand.raised.fill";            animate = false
+        case .idle:    label = "Idle";    color = .gray;   icon = "pause.circle.fill";           animate = false
+        case .unknown: label = "待機なし"; color = .gray;  icon = "terminal";                    animate = false
+        }
+    }
+}
+
 /// カードの見た目（ドラッグ中のオーバーレイでも再利用する非依存ビュー）
 struct CardFace: View {
     let card: Card
@@ -11,80 +32,112 @@ struct CardFace: View {
     var onEdit: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
 
+    private var status: AgentStatusStyle { AgentStatusStyle(card: card) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                Text(card.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                Spacer(minLength: 4)
-                AgentBadge(card: card)
+        HStack(spacing: 0) {
+            // シグネチャ: Agent状態のステータスレール（壁一面で状態を一目スキャン）
+            Rectangle()
+                .fill(status.color)
+                .frame(width: 4)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 6) {
+                    Text(card.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    AgentBadge(card: card)
+                    if showActions {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("カード名を編集")
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    metaLine("folder", card.workingDirPath ?? "~/path/to/project", truncation: .head)
+                    if card.branch != nil || card.prURL != nil {
+                        HStack(spacing: 8) {
+                            if let branch = card.branch {
+                                metaLine("arrow.triangle.branch", branch, truncation: .tail)
+                            }
+                            Spacer(minLength: 4)
+                            if let pr = card.prURL, let url = URL(string: pr) {
+                                Button { NSWorkspace.shared.open(url) } label: {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "arrow.up.forward.square")
+                                        Text("PR")
+                                    }
+                                    .font(.caption2.weight(.semibold))
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.blue)
+                                .help(pr)
+                            }
+                        }
+                    }
+                }
+
                 if showActions {
-                    Button(action: onEdit) {
-                        Image(systemName: "pencil").font(.caption2)
+                    Button(action: onOpenTerminal) {
+                        Label("ターミナルを開く", systemImage: "terminal.fill")
+                            .font(.callout.weight(.semibold))
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderless)
-                    .help("カード名を編集")
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .help("ターミナルを開く")
                 }
             }
-            HStack(spacing: 4) {
-                Image(systemName: "folder")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(card.workingDirPath ?? "~/path/to/project")   // cwd プレースホルダ
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer(minLength: 4)
-                if let pr = card.prURL, let url = URL(string: pr) {
-                    Button { NSWorkspace.shared.open(url) } label: {
-                        Label("PR", systemImage: "arrow.triangle.branch").font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .help(pr)
-                }
-            }
-            if showActions {
-                Button(action: onOpenTerminal) {
-                    Label("ターミナルを開く", systemImage: "terminal.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .help("ターミナルを開く")
-            }
+            .padding(12)
         }
-        .padding(10)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(status.color.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func metaLine(_ systemImage: String, _ text: String, truncation: Text.TruncationMode) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage).font(.caption2)
+            Text(text).font(.system(.caption2, design: .monospaced))
+        }
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(truncation)
     }
 }
 
 struct AgentBadge: View {
     let card: Card
+    @State private var spin = false
 
     var body: some View {
-        let s = style
-        HStack(spacing: 3) {
+        let s = AgentStatusStyle(card: card)
+        HStack(spacing: 4) {
             Image(systemName: s.icon)
+                .rotationEffect(.degrees(s.animate && spin ? 360 : 0))
+                .animation(
+                    s.animate ? .linear(duration: 1.4).repeatForever(autoreverses: false) : .default,
+                    value: spin
+                )
             Text(s.label)
         }
-        .font(.caption2)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(s.color.opacity(0.2), in: Capsule())
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(s.color.opacity(0.18), in: Capsule())
         .foregroundStyle(s.color)
-    }
-
-    private var style: (label: String, color: Color, icon: String) {
-        if card.isDone { return ("Done", .blue, "checkmark.circle") }
-        switch card.agentState {
-        case .working: return ("Working", .green, "arrow.triangle.2.circlepath")
-        case .blocked: return ("Blocked", .orange, "hand.raised")
-        case .idle:    return ("Idle", .gray, "pause.circle")
-        case .unknown: return ("—", .gray, "terminal")
+        .onAppear { if s.animate { spin = true } }
+        .onChange(of: card.agentStateRaw) { _, _ in
+            spin = AgentStatusStyle(card: card).animate
         }
     }
 }
@@ -95,8 +148,6 @@ struct CardView: View {
     @Environment(TerminalSessions.self) private var sessions
     @Bindable var card: Card
 
-    // ジェスチャ終了/キャンセルで必ず自動リセットされ、移動先の新viewには引き継がれない。
-    // ID ベースのグローバルフラグと違い「移動先で薄いまま」が原理的に起きない。
     @GestureState private var isDragging = false
 
     @State private var renaming = false
@@ -151,12 +202,6 @@ struct CardView: View {
             }
     }
 
-    private func deleteCard() {
-        if uiState.terminalCardID == card.id { uiState.terminalCardID = nil }
-        sessions.close(card.id)
-        do { try BoardStore(context: context).deleteCard(card) } catch {}
-    }
-
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .named("board"))
             .updating($isDragging) { _, state, _ in state = true }
@@ -174,6 +219,12 @@ struct CardView: View {
     private func beginRename() {
         draft = card.title
         renaming = true
+    }
+
+    private func deleteCard() {
+        if uiState.terminalCardID == card.id { uiState.terminalCardID = nil }
+        sessions.close(card.id)
+        do { try BoardStore(context: context).deleteCard(card) } catch {}
     }
 }
 
