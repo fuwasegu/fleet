@@ -13,7 +13,7 @@ final class BoardUIState {
     var columnFrames: [UUID: CGRect] = [:]     // 各列の "board" 座標系フレーム
     var terminalCardID: UUID?                  // ターミナルモーダルを開いているカード(fsl: terminal_open)
     var previewURL: URL?                        // Markdownプレビュー中のファイル(fsl: preview_open、terminal の上層)
-    var tooltipText: String?                   // プロンプト行ホバー時の tooltip 本文(cwd/branch/PR)
+    var tooltipCardID: UUID?                   // プロンプト行ホバー中のカード(tooltip 表示対象)
     var tooltipAnchor: CGPoint?                // "board" 座標系でのカーソル位置(tooltip の基準点)
 }
 

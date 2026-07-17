@@ -210,20 +210,102 @@ extension Card {
     }
 }
 
-/// ボード最上位に浮かせる自前ツールチップ(ダーク・等幅、折り返しなし)。
+/// ボード最上位に浮かせる自前ツールチップ。ターミナル調のコンテキストカード。
+/// アイコン付きの構造化行 + cwd 末尾強調 + 緑ブランチ + PR チップ。
 struct PromptTooltip: View {
-    let text: String
+    let card: Card
+
+    private static let link = Color(hex: "6FB0FF")!
+
     var body: some View {
-        Text(text)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(PromptTheme.text)
-            .lineLimit(nil)
-            .fixedSize()                       // 折り返さず内容幅にフィット
-            .padding(.horizontal, 9)
-            .padding(.vertical, 7)
-            .background(Color(hex: "0E0F11")!, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.16)))
-            .shadow(color: .black.opacity(0.55), radius: 10, y: 4)
+        VStack(alignment: .leading, spacing: 0) {
+            // ヘッダ: 小さな窓装飾 + eyebrow
+            HStack(spacing: 5) {
+                Circle().fill(PromptTheme.ok).frame(width: 5, height: 5)
+                Text("CONTEXT")
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(PromptTheme.muted)
+            }
+            .padding(.bottom, 8)
+
+            VStack(alignment: .leading, spacing: 7) {
+                row("folder") { cwdText }
+                if card.branch != nil { row("arrow.triangle.branch") { branchText } }
+                if prNumber != nil { row("arrow.up.forward.square") { prText } }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            LinearGradient(colors: [Color(hex: "1C2126")!, Color(hex: "0C0E10")!],
+                           startPoint: .top, endPoint: .bottom),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.05)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(0.6), radius: 14, y: 6)
+    }
+
+    private func row<C: View>(_ icon: String, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(PromptTheme.muted)
+                .frame(width: 13, alignment: .center)
+            content()
+        }
+    }
+
+    /// cwd: 親パスを muted、末尾ディレクトリを強調。
+    @ViewBuilder private var cwdText: some View {
+        let full = card.workingDirPath ?? ""
+        let base = (full as NSString).lastPathComponent
+        let parent = (full as NSString).deletingLastPathComponent
+        (
+            Text(parent.isEmpty || parent == "/" ? (parent == "/" ? "/" : "") : parent + "/")
+                .foregroundStyle(PromptTheme.muted)
+            + Text(base).foregroundStyle(PromptTheme.text).fontWeight(.semibold)
+        )
+        .font(.system(size: 11.5, design: .monospaced))
+        .fixedSize()
+    }
+
+    @ViewBuilder private var branchText: some View {
+        Text(card.branch ?? "")
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundStyle(PromptTheme.ok)
+            .fixedSize()
+    }
+
+    @ViewBuilder private var prText: some View {
+        HStack(spacing: 7) {
+            Text(prNumber ?? "")
+                .foregroundStyle(Self.link)
+                .fontWeight(.semibold)
+            if let repo = prRepo {
+                Text(repo).foregroundStyle(PromptTheme.muted)
+            }
+        }
+        .font(.system(size: 11.5, design: .monospaced))
+        .fixedSize()
+    }
+
+    private var prParts: [String] { (card.prURL ?? "").split(separator: "/").map(String.init) }
+    private var prNumber: String? {
+        guard card.prURL != nil, let n = prParts.last, !n.isEmpty else { return nil }
+        return "#\(n)"
+    }
+    private var prRepo: String? {
+        let p = prParts
+        guard let i = p.firstIndex(of: "github.com"), i + 2 < p.count else { return nil }
+        return "\(p[i + 1])/\(p[i + 2])"
     }
 }
 
@@ -262,10 +344,10 @@ struct CardView: View {
             onOpenTerminal: { uiState.terminalCardID = card.id },
             onPromptHover: { location in
                 if let location {
-                    uiState.tooltipText = card.promptTooltipText
+                    uiState.tooltipCardID = card.id
                     uiState.tooltipAnchor = location
-                } else if uiState.tooltipText == card.promptTooltipText {
-                    uiState.tooltipText = nil
+                } else if uiState.tooltipCardID == card.id {
+                    uiState.tooltipCardID = nil
                     uiState.tooltipAnchor = nil
                 }
             }

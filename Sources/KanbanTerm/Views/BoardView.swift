@@ -207,16 +207,18 @@ struct BoardView: View {
 
     /// プロンプト行ホバー時の tooltip。列のクリップを受けないよう最上位で、カーソル付近に浮かせる。
     @ViewBuilder private var tooltipOverlay: some View {
-        if let text = uiState.tooltipText, let anchor = uiState.tooltipAnchor,
-           !text.isEmpty, uiState.draggingCardID == nil, uiState.terminalCardID == nil {
+        if let id = uiState.tooltipCardID, let anchor = uiState.tooltipAnchor,
+           uiState.draggingCardID == nil, uiState.terminalCardID == nil,
+           let card = BoardStore(context: context).card(withID: id),
+           !card.promptTooltipText.isEmpty {
             GeometryReader { geo in
-                let lines = text.split(separator: "\n")
+                let lines = card.promptTooltipText.split(separator: "\n")
                 let longest = lines.map(\.count).max() ?? 0
-                let estWidth = CGFloat(longest) * 6.9 + 24
-                let estHeight = CGFloat(lines.count) * 15 + 16
+                let estWidth = CGFloat(longest) * 7.1 + 60      // アイコン列 + 余白込み
+                let estHeight = CGFloat(lines.count) * 21 + 44   // ヘッダ + 余白込み
                 let x = min(max(12, anchor.x + 14), max(12, geo.size.width - estWidth - 12))
                 let y = min(anchor.y + 18, max(12, geo.size.height - estHeight - 12))
-                PromptTooltip(text: text)
+                PromptTooltip(card: card)
                     .offset(x: x, y: y)
             }
             .allowsHitTesting(false)
