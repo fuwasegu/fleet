@@ -74,12 +74,16 @@ struct CardView: View {
     @Environment(BoardUIState.self) private var uiState
     @Bindable var card: Card
 
+    // ジェスチャ終了/キャンセルで必ず自動リセットされ、移動先の新viewには引き継がれない。
+    // ID ベースのグローバルフラグと違い「移動先で薄いまま」が原理的に起きない。
+    @GestureState private var isDragging = false
+
     @State private var renaming = false
     @State private var draft = ""
 
     var body: some View {
         CardFace(card: card, showEditButton: true, onEdit: beginRename)
-            .opacity(uiState.draggingCardID == card.id ? 0.05 : 1)
+            .opacity(isDragging ? 0.05 : 1)
             .onGeometryChange(for: CGRect.self) {
                 $0.frame(in: .named("board"))
             } action: { rect in
@@ -95,10 +99,9 @@ struct CardView: View {
 
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .named("board"))
+            .updating($isDragging) { _, state, _ in state = true }
             .onChanged { value in
-                if uiState.draggingCardID == nil {
-                    uiState.draggingCardID = card.id
-                }
+                uiState.draggingCardID = card.id
                 uiState.dragLocation = value.location
             }
             .onEnded { value in
