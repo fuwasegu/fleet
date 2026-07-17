@@ -72,8 +72,14 @@ struct BoardView: View {
                     }
                     .padding(10)
                     Divider()
-                    TerminalView(cardID: id, directory: card.workingDirPath, sessions: sessions)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    TerminalView(
+                        cardID: id,
+                        directory: card.workingDirPath,
+                        startAgent: card.autoStartAgent,
+                        dangerSkip: card.dangerSkip,
+                        sessions: sessions
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .background(.background, in: RoundedRectangle(cornerRadius: 12))
                 .clipShape(RoundedRectangle(cornerRadius: 12))

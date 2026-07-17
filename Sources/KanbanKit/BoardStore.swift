@@ -58,9 +58,18 @@ public struct BoardStore {
     // MARK: - カード
 
     @discardableResult
-    public func addCard(title: String, to column: BoardColumn) throws -> Card {
+    public func addCard(title: String,
+                        to column: BoardColumn,
+                        workingDirPath: String? = nil,
+                        dangerSkip: Bool = false,
+                        autoStartAgent: Bool = false) throws -> Card {
         let next = (column.cards.map(\.order).max() ?? -1) + 1
-        let card = Card(title: title, order: next, column: column)
+        let card = Card(title: title,
+                        order: next,
+                        column: column,
+                        workingDirPath: workingDirPath,
+                        dangerSkip: dangerSkip,
+                        autoStartAgent: autoStartAgent)
         context.insert(card)
         try context.save()
         return card

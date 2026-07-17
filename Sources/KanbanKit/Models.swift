@@ -37,10 +37,10 @@ public final class Card {
     public var order: Int
     public var column: BoardColumn?
 
-    // 将来スライス用のフィールド（今スライスは表示のみ / デフォルト値）
     public var workingDirPath: String?
     public var agentStateRaw: String
-    public var dangerSkip: Bool
+    public var dangerSkip: Bool        // 危険モードスキップ (Claude: --dangerously-skip-permissions)
+    public var autoStartAgent: Bool    // カードのターミナル初回起動時に Claude を自動起動するか
     public var seen: Bool
 
     public init(id: UUID = UUID(),
@@ -50,6 +50,7 @@ public final class Card {
                 workingDirPath: String? = nil,
                 agentState: AgentState = .unknown,
                 dangerSkip: Bool = false,
+                autoStartAgent: Bool = false,
                 seen: Bool = true) {
         self.id = id
         self.title = title
@@ -58,6 +59,7 @@ public final class Card {
         self.workingDirPath = workingDirPath
         self.agentStateRaw = agentState.rawValue
         self.dangerSkip = dangerSkip
+        self.autoStartAgent = autoStartAgent
         self.seen = seen
     }
 

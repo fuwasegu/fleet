@@ -7,6 +7,8 @@ struct ColumnView: View {
     @Environment(BoardUIState.self) private var uiState
     @Bindable var column: BoardColumn
 
+    @State private var addingCard = false
+
     private var store: BoardStore { BoardStore(context: context) }
     private var sortedCards: [Card] { column.cards.sorted { $0.order < $1.order } }
     private var accent: Color { column.colorHex.flatMap(Color.init(hex:)) ?? .gray }
@@ -26,10 +28,20 @@ struct ColumnView: View {
                 .animation(.snappy(duration: 0.22), value: sortedCards.map(\.id))
             }
             Button("カードを追加", systemImage: "plus") {
-                do { try store.addCard(title: "新しいカード", to: column) } catch {}
+                addingCard = true
             }
             .buttonStyle(.borderless)
             .font(.caption)
+        }
+        .sheet(isPresented: $addingCard) {
+            NewCardSheet { title, dir, autoStart, danger in
+                do {
+                    try store.addCard(
+                        title: title, to: column,
+                        workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart
+                    )
+                } catch {}
+            }
         }
         .padding(10)
         .frame(width: 280)

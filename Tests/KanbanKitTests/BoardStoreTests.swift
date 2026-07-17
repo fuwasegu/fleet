@@ -83,6 +83,18 @@ struct BoardStoreTests {
         #expect(c0.column?.id == a.id)
     }
 
+    @Test func addCardStoresCreationOptions() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(
+            title: "task", to: a,
+            workingDirPath: "/tmp/proj", dangerSkip: true, autoStartAgent: true
+        )
+        #expect(c.workingDirPath == "/tmp/proj")
+        #expect(c.dangerSkip == true)
+        #expect(c.autoStartAgent == true)
+    }
+
     @Test func newCardDefaultsToUnknownAndSeen() throws {
         let store = try makeStore()
         let a = try store.addColumn(name: "A")
