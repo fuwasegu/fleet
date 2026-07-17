@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 import KanbanKit
 
 struct BoardView: View {
@@ -29,6 +30,9 @@ struct BoardView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onDrop(of: [.text], delegate: BoardResetDropDelegate(uiState: uiState))
         .navigationTitle("KANBAN Term")
         .toolbar {
             ToolbarItem {

@@ -37,6 +37,18 @@ enum ColumnPalette {
     ]
 }
 
+/// ボード全体を覆う保険のドロップ受け。列やカードの外(隙間・余白)で離しても
+/// draggingCardID を必ずリセットし、カードが薄いまま固まるのを防ぐ。
+/// カード移動はしない(ライブ移動で確定済みの位置を保持)。内側のcard/column delegateが優先される。
+struct BoardResetDropDelegate: DropDelegate {
+    let uiState: BoardUIState
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool {
+        MainActor.assumeIsolated { uiState.draggingCardID = nil }
+        return true
+    }
+}
+
 /// カード上にホバーした時、方向を考慮してライブ移動（上→下・下→上の双方向で並び替え）
 struct CardDropDelegate: DropDelegate {
     let target: Card
