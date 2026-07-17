@@ -17,6 +17,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     private let context: ModelContext
     private let isViewing: () -> Bool
     private var lastState: AgentState = .unknown
+    weak var term: LocalProcessTerminalView?   // Blocked判定のバッファ走査用
 
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
         self.cardID = cardID
@@ -28,7 +29,27 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         let hasSpinner = title.unicodeScalars.contains { (0x2800...0x28FF).contains($0.value) }
-        apply(hasSpinner ? .working : .idle)
+        if hasSpinner {
+            apply(.working)
+        } else {
+            // 作業停止 → バッファ末尾に承認/入力待ちプロンプトがあれば Blocked、無ければ Idle
+            apply(scanForBlocked() ? .blocked : .idle)
+        }
+    }
+
+    /// 画面末尾の数行に既知の承認/入力待ちプロンプトが出ているか (herdr方式)。
+    private func scanForBlocked() -> Bool {
+        guard let t = term?.getTerminal() else { return false }
+        let rows = t.rows
+        var text = ""
+        for r in max(0, rows - 14)..<rows {
+            if let line = t.getLine(row: r) {
+                text += line.translateToString(trimRight: true) + "\n"
+            }
+        }
+        let lower = text.lowercased()
+        return lower.contains("do you want")      // Claude の許可プロンプト "Do you want to proceed?" 等
+            || lower.contains("esc to cancel")     // 選択式プロンプトのフッタ
     }
 
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
@@ -85,6 +106,7 @@ final class TerminalSessions {
             isViewing: { [weak uiState] in uiState?.terminalCardID == cardID }
         )
         term.processDelegate = monitor
+        monitor.term = term
         monitors[cardID] = monitor
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
