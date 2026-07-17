@@ -78,7 +78,9 @@ struct BoardView: View {
                         directory: card.workingDirPath,
                         startAgent: card.autoStartAgent,
                         dangerSkip: card.dangerSkip,
-                        sessions: sessions
+                        sessions: sessions,
+                        context: context,
+                        uiState: uiState
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }

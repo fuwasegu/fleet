@@ -1,19 +1,91 @@
 import SwiftUI
-import SwiftTerm
+import Foundation
+import SwiftData
+@preconcurrency import SwiftTerm
+import KanbanKit
+
+/// 端末の状態を監視して Card.agentState / cwd を更新する (herdr方式の一部)。
+/// - Working: 端末タイトル(OSC 0/2)の先頭付近にスピナー(点字 U+2800–U+28FF)
+/// - Idle: スピナーが消えた / プロセス終了
+/// - cwd: OSC 7 (hostCurrentDirectoryUpdate)
+/// Blocked(承認プロンプト)の検知はバッファ走査が必要なため v2 で対応。
+/// delegate コールバックはメインスレッドで来るため @MainActor。
+@MainActor
+final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalViewDelegate {
+    let cardID: UUID
+    private let context: ModelContext
+    private let isViewing: () -> Bool
+    private var lastState: AgentState = .unknown
+
+    init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
+        self.cardID = cardID
+        self.context = context
+        self.isViewing = isViewing
+    }
+
+    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        let hasSpinner = title.unicodeScalars.contains { (0x2800...0x28FF).contains($0.value) }
+        apply(hasSpinner ? .working : .idle)
+    }
+
+    func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
+        guard let directory, let path = Self.path(fromOSC7: directory) else { return }
+        guard let card = BoardStore(context: context).card(withID: cardID) else { return }
+        if card.workingDirPath != path {
+            card.workingDirPath = path
+            try? context.save()
+        }
+    }
+
+    func processTerminated(source: SwiftTerm.TerminalView, exitCode: Int32?) {
+        apply(.idle)
+    }
+
+    private func apply(_ state: AgentState) {
+        guard let card = BoardStore(context: context).card(withID: cardID) else { return }
+        var changed = false
+        if isViewing() {
+            if !card.seen { card.seen = true; changed = true }
+        } else if state == .idle && lastState == .working {
+            if card.seen { card.seen = false; changed = true }   // 別画面にいる間に完了 → Done(未読)
+        }
+        if card.agentState != state { card.agentState = state; changed = true }
+        lastState = state
+        if changed { try? context.save() }
+    }
+
+    private static func path(fromOSC7 s: String) -> String? {
+        if s.hasPrefix("file://"), let url = URL(string: s) { return url.path }
+        return s.hasPrefix("/") ? s : nil
+    }
+}
 
 /// カード単位のターミナルセッションを保持する。閉じても(非表示にしても)プロセスは生かしたまま。
-/// → 仕様「Terminal を閉じても Agent は動く」に合致し、周囲クリックで誤って閉じてもセッションは残る。
 @MainActor
 @Observable
 final class TerminalSessions {
     private var views: [UUID: LocalProcessTerminalView] = [:]
+    private var monitors: [UUID: AgentStateMonitor] = [:]   // processDelegate は weak なので保持する
 
-    /// カードのターミナルview。初回だけシェルを起動し、以後は同じインスタンスを再利用する。
-    /// startAgent が true の初回起動時は、対話ログインシェル起動後に `claude` をキー入力として送る
-    /// (.zshrc 等が読まれ PATH が通った状態＝手動と同じ環境なので確実に起動できる)。
-    func view(for cardID: UUID, directory: String?, startAgent: Bool, dangerSkip: Bool) -> LocalProcessTerminalView {
+    func view(for cardID: UUID,
+              directory: String?,
+              startAgent: Bool,
+              dangerSkip: Bool,
+              context: ModelContext,
+              uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
         let term = LocalProcessTerminalView(frame: .zero)
+
+        let monitor = AgentStateMonitor(
+            cardID: cardID,
+            context: context,
+            isViewing: { [weak uiState] in uiState?.terminalCardID == cardID }
+        )
+        term.processDelegate = monitor
+        monitors[cardID] = monitor
+
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let env = Terminal.getEnvironmentVariables(termName: "xterm-256color", trueColor: true)
         term.startProcess(
@@ -26,7 +98,6 @@ final class TerminalSessions {
         if startAgent {
             let danger = dangerSkip ? " --dangerously-skip-permissions" : ""
             let bytes = ArraySlice(Array("claude\(danger)\n".utf8))
-            // シェルのプロンプトが出る頃に投入(type-aheadでも取りこぼしにくいが余裕を見る)
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(700))
                 term.send(source: term, data: bytes)
@@ -40,6 +111,7 @@ final class TerminalSessions {
     func close(_ cardID: UUID) {
         views[cardID]?.terminate()
         views[cardID] = nil
+        monitors[cardID] = nil
     }
 
     private static func resolve(_ directory: String?) -> String {
@@ -58,9 +130,15 @@ struct TerminalView: NSViewRepresentable {
     let startAgent: Bool
     let dangerSkip: Bool
     let sessions: TerminalSessions
+    let context: ModelContext
+    let uiState: BoardUIState
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        sessions.view(for: cardID, directory: directory, startAgent: startAgent, dangerSkip: dangerSkip)
+        sessions.view(
+            for: cardID, directory: directory,
+            startAgent: startAgent, dangerSkip: dangerSkip,
+            context: self.context, uiState: uiState
+        )
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
