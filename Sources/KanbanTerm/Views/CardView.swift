@@ -5,8 +5,9 @@ import KanbanKit
 /// カードの見た目（ドラッグ中のオーバーレイでも再利用する非依存ビュー）
 struct CardFace: View {
     let card: Card
-    var showEditButton: Bool = false
+    var showActions: Bool = false
     var onEdit: () -> Void = {}
+    var onOpenTerminal: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -27,7 +28,12 @@ struct CardFace: View {
                     .lineLimit(1)
                     .truncationMode(.head)
                 Spacer(minLength: 4)
-                if showEditButton {
+                if showActions {
+                    Button(action: onOpenTerminal) {
+                        Image(systemName: "terminal").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("ターミナルを開く")
                     Button(action: onEdit) {
                         Image(systemName: "pencil").font(.caption2)
                     }
@@ -80,9 +86,15 @@ struct CardView: View {
 
     @State private var renaming = false
     @State private var draft = ""
+    @State private var showingTerminal = false
 
     var body: some View {
-        CardFace(card: card, showEditButton: true, onEdit: beginRename)
+        CardFace(
+            card: card,
+            showActions: true,
+            onEdit: beginRename,
+            onOpenTerminal: { showingTerminal = true }
+        )
             .opacity(isDragging ? 0.05 : 1)
             .onGeometryChange(for: CGRect.self) {
                 $0.frame(in: .named("board"))
@@ -94,6 +106,9 @@ struct CardView: View {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
                 }
+            }
+            .sheet(isPresented: $showingTerminal) {
+                TerminalModal(title: card.title, directory: card.workingDirPath)
             }
     }
 

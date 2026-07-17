@@ -9,6 +9,10 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGNING_ALLOWED: "NO"
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.2.0"
 targets:
   KanbanKit:
     type: framework
@@ -28,6 +32,7 @@ targets:
     dependencies:
       - target: KanbanKit
         embed: true
+      - package: SwiftTerm
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanTerm
