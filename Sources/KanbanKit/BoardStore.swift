@@ -78,6 +78,11 @@ public struct BoardStore {
         return try? context.fetch(descriptor).first
     }
 
+    public func column(withID id: UUID) -> BoardColumn? {
+        let descriptor = FetchDescriptor<BoardColumn>(predicate: #Predicate { $0.id == id })
+        return try? context.fetch(descriptor).first
+    }
+
     public func deleteCard(_ card: Card) throws {
         let column = card.column
         context.delete(card)

@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 import KanbanKit
 
 struct ColumnView: View {
@@ -22,13 +21,6 @@ struct ColumnView: View {
                 LazyVStack(spacing: 8) {
                     ForEach(sortedCards) { card in
                         CardView(card: card)
-                            .onDrop(
-                                of: [.text],
-                                delegate: CardDropDelegate(
-                                    target: card, column: column,
-                                    context: context, uiState: uiState
-                                )
-                            )
                     }
                 }
                 .animation(.snappy(duration: 0.22), value: sortedCards.map(\.id))
@@ -44,10 +36,11 @@ struct ColumnView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(0.25)))
-        .onDrop(
-            of: [.text],
-            delegate: ColumnDropDelegate(column: column, context: context, uiState: uiState)
-        )
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named("board"))
+        } action: { rect in
+            uiState.columnFrames[column.id] = rect
+        }
     }
 
     private var header: some View {

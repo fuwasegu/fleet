@@ -139,6 +139,13 @@ struct BoardStoreTests {
         #expect(store.card(withID: UUID()) == nil)
     }
 
+    @Test func columnWithIDResolves() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        #expect(store.column(withID: a.id)?.id == a.id)
+        #expect(store.column(withID: UUID()) == nil)
+    }
+
     // 先頭カードを最下部へ（上→下の並べ替えが store 層で成立すること）
     @Test func moveCardTopToBottom() throws {
         let store = try makeStore()

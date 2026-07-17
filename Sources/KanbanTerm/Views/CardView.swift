@@ -2,13 +2,11 @@ import SwiftUI
 import SwiftData
 import KanbanKit
 
-struct CardView: View {
-    @Environment(\.modelContext) private var context
-    @Environment(BoardUIState.self) private var uiState
-    @Bindable var card: Card
-
-    @State private var renaming = false
-    @State private var draft = ""
+/// カードの見た目（ドラッグ中のオーバーレイでも再利用する非依存ビュー）
+struct CardFace: View {
+    let card: Card
+    var showEditButton: Bool = false
+    var onEdit: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -17,7 +15,7 @@ struct CardView: View {
                     .font(.body.weight(.medium))
                     .lineLimit(2)
                 Spacer(minLength: 4)
-                agentBadge
+                AgentBadge(card: card)
             }
             HStack(spacing: 4) {
                 Image(systemName: "folder")
@@ -29,69 +27,90 @@ struct CardView: View {
                     .lineLimit(1)
                     .truncationMode(.head)
                 Spacer(minLength: 4)
-                Button {
-                    draft = card.title
-                    renaming = true
-                } label: {
-                    Image(systemName: "pencil").font(.caption2)
+                if showEditButton {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("カード名を編集")
                 }
-                .buttonStyle(.borderless)
-                .help("カード名を編集")
             }
         }
         .padding(10)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-        .contentShape(Rectangle())
-        .opacity(uiState.draggingCardID == card.id ? 0.05 : 1)
-        .onDrag {
-            uiState.draggingCardID = card.id
-            return NSItemProvider(object: card.id.uuidString as NSString)
-        } preview: {
-            cardPreview
-        }
-        .sheet(isPresented: $renaming) {
-            RenameCardSheet(title: $draft) { newTitle in
-                do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
-            }
-        }
     }
+}
 
-    /// ドラッグ中カーソルに追従するプレビュー（元カードは opacity で隠す）
-    private var cardPreview: some View {
-        Text(card.title)
-            .font(.body.weight(.medium))
-            .lineLimit(2)
-            .padding(10)
-            .frame(width: 248, alignment: .leading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-            .shadow(radius: 8, y: 4)
-    }
+struct AgentBadge: View {
+    let card: Card
 
-    @ViewBuilder private var agentBadge: some View {
-        let style = badgeStyle
+    var body: some View {
+        let s = style
         HStack(spacing: 3) {
-            Image(systemName: style.icon)
-            Text(style.label)
+            Image(systemName: s.icon)
+            Text(s.label)
         }
         .font(.caption2)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(style.color.opacity(0.2), in: Capsule())
-        .foregroundStyle(style.color)
+        .background(s.color.opacity(0.2), in: Capsule())
+        .foregroundStyle(s.color)
     }
 
-    private var badgeStyle: (label: String, color: Color, icon: String) {
-        if card.isDone {
-            return ("Done", .blue, "checkmark.circle")
-        }
+    private var style: (label: String, color: Color, icon: String) {
+        if card.isDone { return ("Done", .blue, "checkmark.circle") }
         switch card.agentState {
         case .working: return ("Working", .green, "arrow.triangle.2.circlepath")
         case .blocked: return ("Blocked", .orange, "hand.raised")
         case .idle:    return ("Idle", .gray, "pause.circle")
         case .unknown: return ("—", .gray, "terminal")
         }
+    }
+}
+
+struct CardView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(BoardUIState.self) private var uiState
+    @Bindable var card: Card
+
+    @State private var renaming = false
+    @State private var draft = ""
+
+    var body: some View {
+        CardFace(card: card, showEditButton: true, onEdit: beginRename)
+            .opacity(uiState.draggingCardID == card.id ? 0.05 : 1)
+            .onGeometryChange(for: CGRect.self) {
+                $0.frame(in: .named("board"))
+            } action: { rect in
+                uiState.cardFrames[card.id] = rect
+            }
+            .gesture(dragGesture)
+            .sheet(isPresented: $renaming) {
+                RenameCardSheet(title: $draft) { newTitle in
+                    do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
+                }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named("board"))
+            .onChanged { value in
+                if uiState.draggingCardID == nil {
+                    uiState.draggingCardID = card.id
+                }
+                uiState.dragLocation = value.location
+            }
+            .onEnded { value in
+                commitCardDrop(cardID: card.id, at: value.location, context: context, uiState: uiState)
+                uiState.draggingCardID = nil
+                uiState.dragLocation = nil
+            }
+    }
+
+    private func beginRename() {
+        draft = card.title
+        renaming = true
     }
 }
 

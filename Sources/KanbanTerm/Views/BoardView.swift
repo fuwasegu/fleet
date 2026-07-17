@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 import KanbanKit
 
 struct BoardView: View {
@@ -31,8 +30,8 @@ struct BoardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .contentShape(Rectangle())
-        .onDrop(of: [.text], delegate: BoardResetDropDelegate(uiState: uiState))
+        .coordinateSpace(.named("board"))
+        .overlay(alignment: .topLeading) { draggedOverlay }
         .navigationTitle("KANBAN Term")
         .toolbar {
             ToolbarItem {
@@ -40,6 +39,20 @@ struct BoardView: View {
             }
         }
         .environment(uiState)
+    }
+
+    /// ドラッグ中のカードをカーソルに追従表示（元カードは opacity で隠す）
+    @ViewBuilder private var draggedOverlay: some View {
+        if let id = uiState.draggingCardID,
+           let loc = uiState.dragLocation,
+           let card = BoardStore(context: context).card(withID: id) {
+            CardFace(card: card)
+                .frame(width: 256)
+                .opacity(0.95)
+                .shadow(radius: 10, y: 6)
+                .position(loc)
+                .allowsHitTesting(false)
+        }
     }
 
     private func addColumn() {
