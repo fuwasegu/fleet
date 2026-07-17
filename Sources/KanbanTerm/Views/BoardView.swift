@@ -7,6 +7,8 @@ struct BoardView: View {
     @Query(sort: \BoardColumn.order) private var columns: [BoardColumn]
     @State private var uiState = BoardUIState()
     @State private var sessions = TerminalSessions()
+    @State private var caffeine = CaffeineController()
+    @State private var showingCaffeine = false
 
     var body: some View {
         Group {
@@ -37,6 +39,18 @@ struct BoardView: View {
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
         .navigationTitle("KANBAN Term")
         .toolbar {
+            ToolbarItem {
+                Button {
+                    showingCaffeine.toggle()
+                } label: {
+                    Image(systemName: caffeine.isOn ? "cup.and.saucer.fill" : "cup.and.saucer")
+                        .foregroundStyle(caffeine.isOn ? .orange : .primary)
+                }
+                .help("スリープ防止 (caffeinate)")
+                .popover(isPresented: $showingCaffeine, arrowEdge: .bottom) {
+                    CaffeinePopover(caffeine: caffeine)
+                }
+            }
             ToolbarItem {
                 Button("列を追加", systemImage: "plus") { addColumn() }
             }
