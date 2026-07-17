@@ -37,11 +37,12 @@ public final class Card {
     public var order: Int
     public var column: BoardColumn?
 
-    public var workingDirPath: String?
-    public var agentStateRaw: String
-    public var dangerSkip: Bool        // 危険モードスキップ (Claude: --dangerously-skip-permissions)
-    public var autoStartAgent: Bool    // カードのターミナル初回起動時に Claude を自動起動するか
-    public var seen: Bool
+    // 宣言時デフォルト値は SwiftData の軽量マイグレーション(既存ストアへ属性追加)に必須。
+    public var workingDirPath: String? = nil
+    public var agentStateRaw: String = AgentState.unknown.rawValue
+    public var dangerSkip: Bool = false        // 危険モードスキップ (Claude: --dangerously-skip-permissions)
+    public var autoStartAgent: Bool = false    // カードのターミナル初回起動時に Claude を自動起動するか
+    public var seen: Bool = true
 
     public init(id: UUID = UUID(),
                 title: String,
