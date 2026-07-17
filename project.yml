@@ -51,6 +51,11 @@ schemes:
       targets:
         KanbanTerm: all
         KanbanKitTests: [test]
+    run:
+      # 会社管理PCで出る "Developer Tools Access" 認証を回避するため、
+      # Run時にデバッガをアタッチしない(ブレークポイントは使えなくなる)。
+      # デバッグしたくなったら Xcode の Edit Scheme > Run > Info > Debug executable を一時ONに。
+      debugEnabled: false
     test:
       targets:
         - KanbanKitTests
