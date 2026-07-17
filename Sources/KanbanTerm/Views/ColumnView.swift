@@ -79,7 +79,7 @@ struct ColumnView: View {
         Menu {
             Button("なし") { setColor(nil) }
             ForEach(ColumnPalette.colors, id: \.hex) { entry in
-                Button(entry.name) { setColor(entry.hex) }
+                Button(LocalizedStringKey(entry.name)) { setColor(entry.hex) }
             }
         } label: {
             Image(systemName: "paintpalette")

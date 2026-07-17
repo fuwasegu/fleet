@@ -4,6 +4,7 @@ options:
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
+  developmentLanguage: ja   # 基準言語=日本語(日本語文字列をそのままローカライズキーに)
 settings:
   base:
     SWIFT_VERSION: "6.0"

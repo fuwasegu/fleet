@@ -27,6 +27,7 @@
 - 現状はローカル transcript(jsonl) 集計で十分（Claude Code のセッション使用量が取れるのはこれ）。
 - 組織 Admin API キーがあれば Anthropic の Usage/Cost Admin API で組織横断の集計も可能（個人用途には過剰）。必要時のみ。
 
-## 多言語化
-
-- 少なくとも英語と日本語に対応．
+## 多言語化 → 実装済み(英語 / 日本語)
+- 基準言語=日本語(日本語文字列をローカライズキーに)、en.lproj/ja.lproj を variant group で用意。
+- Text/Button/Label/help 等は自動ローカライズ。動的 String は String(localized:) / LocalizedStringKey で対応。
+- カード名・列名はユーザーデータのため翻訳対象外(入力どおり表示)。

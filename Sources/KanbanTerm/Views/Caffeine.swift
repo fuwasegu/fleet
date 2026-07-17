@@ -65,7 +65,7 @@ struct CaffeinePopover: View {
             }
             HStack {
                 ForEach(presets, id: \.1) { label, secs in
-                    Button(label) { caffeine.timeoutSeconds = secs }
+                    Button(LocalizedStringKey(label)) { caffeine.timeoutSeconds = secs }
                 }
             }
             .buttonStyle(.bordered)

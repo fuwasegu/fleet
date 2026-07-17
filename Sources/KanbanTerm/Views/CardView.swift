@@ -26,14 +26,14 @@ struct AgentStatusStyle {
 
     init(card: Card) {
         if card.isDone {
-            glyph = "✓"; tag = "DONE"; status = "未読"; color = PromptTheme.ok; spin = false; showQuestion = false
+            glyph = "✓"; tag = "DONE"; status = String(localized: "未読"); color = PromptTheme.ok; spin = false; showQuestion = false
             return
         }
         switch card.agentState {
         case .working:
             glyph = "◐"; tag = "WORKING"; status = "";        color = PromptTheme.ok;      spin = true;  showQuestion = false
         case .blocked:
-            glyph = "●"; tag = "BLOCKED"; status = "承認待ち"; color = PromptTheme.blocked; spin = false; showQuestion = true
+            glyph = "●"; tag = "BLOCKED"; status = String(localized: "承認待ち"); color = PromptTheme.blocked; spin = false; showQuestion = true
         case .idle:
             glyph = "○"; tag = "IDLE";    status = "";        color = PromptTheme.muted;   spin = false; showQuestion = false
         case .unknown:
@@ -175,7 +175,7 @@ struct CardFace: View {
 
     private var blockedQuestion: String {
         if let q = card.blockedPrompt, !q.isEmpty { return q }
-        return "承認待ち — 応答が必要"
+        return String(localized: "承認待ち — 応答が必要")
     }
 }
 

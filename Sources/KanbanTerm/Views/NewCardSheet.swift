@@ -27,7 +27,7 @@ struct NewCardSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("作業ディレクトリ").font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Text(directory ?? "未選択")
+                    (directory.map(Text.init) ?? Text("未選択"))
                         .font(.callout)
                         .foregroundStyle(directory == nil ? .secondary : .primary)
                         .lineLimit(1)
@@ -39,7 +39,7 @@ struct NewCardSheet: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("タイトル").font(.caption).foregroundStyle(.secondary)
-                TextField(directory.map { ($0 as NSString).lastPathComponent } ?? "タイトル", text: $title)
+                TextField(directory.map { ($0 as NSString).lastPathComponent } ?? String(localized: "タイトル"), text: $title)
                     .textFieldStyle(.roundedBorder)
             }
 

@@ -81,7 +81,7 @@ struct TokenDashboard: View {
         }
     }
 
-    private func row(_ label: String, _ value: Int, bold: Bool = false) -> some View {
+    private func row(_ label: LocalizedStringKey, _ value: Int, bold: Bool = false) -> some View {
         HStack {
             Text(label)
             Spacer()

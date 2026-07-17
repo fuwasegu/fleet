@@ -167,7 +167,7 @@ struct BoardView: View {
                     }
                     .padding(10)
                     Divider()
-                    MarkdownWebView(markdown: (try? String(contentsOf: url, encoding: .utf8)) ?? "読み込めませんでした")
+                    MarkdownWebView(markdown: (try? String(contentsOf: url, encoding: .utf8)) ?? String(localized: "読み込めませんでした"))
                 }
                 .background(.background, in: RoundedRectangle(cornerRadius: 12))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -253,6 +253,6 @@ struct BoardView: View {
     }
 
     private func addColumn() {
-        do { try BoardStore(context: context).addColumn(name: "新しい列") } catch {}
+        do { try BoardStore(context: context).addColumn(name: String(localized: "新しい列")) } catch {}
     }
 }
