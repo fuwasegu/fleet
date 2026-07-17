@@ -1,29 +1,40 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 import KanbanKit
 
 struct ColumnView: View {
     @Environment(\.modelContext) private var context
+    @Environment(BoardUIState.self) private var uiState
     @Bindable var column: BoardColumn
 
     private var store: BoardStore { BoardStore(context: context) }
     private var sortedCards: [Card] { column.cards.sorted { $0.order < $1.order } }
+    private var accent: Color { column.colorHex.flatMap(Color.init(hex:)) ?? .gray }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(accent)
+                .frame(height: 4)
             header
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(sortedCards) { card in
                         CardView(card: card)
-                            .dropDestination(for: String.self) { items, _ in
-                                drop(items, before: card)
-                            }
+                            .onDrop(
+                                of: [.text],
+                                delegate: CardDropDelegate(
+                                    target: card, column: column,
+                                    context: context, uiState: uiState
+                                )
+                            )
                     }
                 }
+                .animation(.snappy(duration: 0.22), value: sortedCards.map(\.id))
             }
             Button("カードを追加", systemImage: "plus") {
-                _ = try? store.addCard(title: "新しいカード", to: column)
+                do { try store.addCard(title: "新しいカード", to: column) } catch {}
             }
             .buttonStyle(.borderless)
             .font(.caption)
@@ -31,10 +42,12 @@ struct ColumnView: View {
         .padding(10)
         .frame(width: 280)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-        .dropDestination(for: String.self) { items, _ in
-            drop(items, at: sortedCards.count)
-        }
+        .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(0.25)))
+        .onDrop(
+            of: [.text],
+            delegate: ColumnDropDelegate(column: column, context: context, uiState: uiState)
+        )
     }
 
     private var header: some View {
@@ -45,8 +58,9 @@ struct ColumnView: View {
             Text("\(column.cards.count)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            colorMenu
             Button(role: .destructive) {
-                try? store.removeColumn(column)
+                do { try store.removeColumn(column) } catch {}
             } label: {
                 Image(systemName: "trash")
             }
@@ -56,29 +70,23 @@ struct ColumnView: View {
         }
     }
 
-    // MARK: - Drag & Drop
-
-    @discardableResult
-    private func drop(_ items: [String], before card: Card) -> Bool {
-        guard let dragged = resolve(items) else { return false }
-        let target = column.cards
-            .filter { $0.id != dragged.id }
-            .sorted { $0.order < $1.order }
-        let index = target.firstIndex(where: { $0.id == card.id }) ?? target.count
-        try? store.moveCard(dragged, to: column, at: index)
-        return true
+    private var colorMenu: some View {
+        Menu {
+            Button("なし") { setColor(nil) }
+            ForEach(ColumnPalette.colors, id: \.hex) { entry in
+                Button(entry.name) { setColor(entry.hex) }
+            }
+        } label: {
+            Image(systemName: "paintpalette")
+                .foregroundStyle(accent)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("列の色を変更")
     }
 
-    @discardableResult
-    private func drop(_ items: [String], at index: Int) -> Bool {
-        guard let dragged = resolve(items) else { return false }
-        try? store.moveCard(dragged, to: column, at: index)
-        return true
-    }
-
-    private func resolve(_ items: [String]) -> Card? {
-        guard let raw = items.first, let uid = UUID(uuidString: raw) else { return nil }
-        let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == uid })
-        return try? context.fetch(descriptor).first
+    private func setColor(_ hex: String?) {
+        do { try store.setColumnColor(column, hex: hex) } catch {}
     }
 }

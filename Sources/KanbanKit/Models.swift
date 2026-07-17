@@ -15,14 +15,17 @@ public final class BoardColumn {
     public var id: UUID
     public var name: String
     public var order: Int
+    /// 列のアクセントカラー(16進 "RRGGBB")。nil はデフォルト色。
+    public var colorHex: String?
 
     @Relationship(deleteRule: .cascade, inverse: \Card.column)
     public var cards: [Card]
 
-    public init(id: UUID = UUID(), name: String, order: Int) {
+    public init(id: UUID = UUID(), name: String, order: Int, colorHex: String? = nil) {
         self.id = id
         self.name = name
         self.order = order
+        self.colorHex = colorHex
         self.cards = []
     }
 }

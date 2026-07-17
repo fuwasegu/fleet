@@ -41,6 +41,11 @@ public struct BoardStore {
         try context.save()
     }
 
+    public func setColumnColor(_ column: BoardColumn, hex: String?) throws {
+        column.colorHex = hex
+        try context.save()
+    }
+
     /// fsl: remove_column — 空でない列は削除不可（孤児カード防止 / CardInExistingColumn）
     public func removeColumn(_ column: BoardColumn) throws {
         guard column.cards.isEmpty else { throw BoardError.columnNotEmpty }
@@ -59,6 +64,18 @@ public struct BoardStore {
         context.insert(card)
         try context.save()
         return card
+    }
+
+    public func renameCard(_ card: Card, to title: String) throws {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw BoardError.emptyName }
+        card.title = trimmed
+        try context.save()
+    }
+
+    public func card(withID id: UUID) -> Card? {
+        let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
+        return try? context.fetch(descriptor).first
     }
 
     public func deleteCard(_ card: Card) throws {

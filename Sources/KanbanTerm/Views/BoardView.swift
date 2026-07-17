@@ -5,6 +5,7 @@ import KanbanKit
 struct BoardView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \BoardColumn.order) private var columns: [BoardColumn]
+    @State private var uiState = BoardUIState()
 
     var body: some View {
         Group {
@@ -24,6 +25,7 @@ struct BoardView: View {
                         }
                     }
                     .padding()
+                    .animation(.snappy(duration: 0.22), value: columns.map(\.id))
                 }
             }
         }
@@ -33,9 +35,10 @@ struct BoardView: View {
                 Button("列を追加", systemImage: "plus") { addColumn() }
             }
         }
+        .environment(uiState)
     }
 
     private func addColumn() {
-        _ = try? BoardStore(context: context).addColumn(name: "新しい列")
+        do { try BoardStore(context: context).addColumn(name: "新しい列") } catch {}
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import SwiftData
 @testable import KanbanKit
@@ -61,6 +62,15 @@ struct BoardStoreTests {
         #expect(cols.last?.id == c.id)
     }
 
+    @Test func setColumnColorPersists() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        try store.setColumnColor(a, hex: "FF453A")
+        #expect(a.colorHex == "FF453A")
+        try store.setColumnColor(a, hex: nil)
+        #expect(a.colorHex == nil)
+    }
+
     // MARK: - カード
 
     @Test func addCardAssignsIncreasingOrder() throws {
@@ -103,6 +113,30 @@ struct BoardStoreTests {
         try store.moveCard(c2, to: a, at: 0)
         let titles = a.cards.sorted { $0.order < $1.order }.map(\.title)
         #expect(titles == ["2", "0", "1"])
+    }
+
+    @Test func renameCardUpdatesTitle() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(title: "old", to: a)
+        try store.renameCard(c, to: "new")
+        #expect(c.title == "new")
+    }
+
+    @Test func renameCardRejectsEmpty() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(title: "keep", to: a)
+        #expect(throws: BoardError.emptyName) { try store.renameCard(c, to: "  ") }
+        #expect(c.title == "keep")
+    }
+
+    @Test func cardWithIDResolves() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(title: "x", to: a)
+        #expect(store.card(withID: c.id)?.id == c.id)
+        #expect(store.card(withID: UUID()) == nil)
     }
 
     @Test func deleteCardNormalizesOrders() throws {
