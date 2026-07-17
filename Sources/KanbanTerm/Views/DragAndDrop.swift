@@ -12,6 +12,7 @@ final class BoardUIState {
     var cardFrames: [UUID: CGRect] = [:]       // 各カードの "board" 座標系フレーム
     var columnFrames: [UUID: CGRect] = [:]     // 各列の "board" 座標系フレーム
     var terminalCardID: UUID?                  // ターミナルモーダルを開いているカード(fsl: terminal_open)
+    var previewURL: URL?                        // Markdownプレビュー中のファイル(fsl: preview_open、terminal の上層)
 }
 
 extension Color {

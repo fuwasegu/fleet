@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import AppKit
+import UniformTypeIdentifiers
 import KanbanKit
 
 struct BoardView: View {
@@ -78,6 +80,13 @@ struct BoardView: View {
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                         Spacer()
                         Button {
+                            openMarkdownPicker(cwd: card.workingDirPath)
+                        } label: {
+                            Label("Markdown", systemImage: "doc.richtext")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Markdown をプレビュー")
+                        Button {
                             closeTerminal()
                         } label: {
                             Image(systemName: "xmark.circle.fill").font(.title3)
@@ -103,9 +112,60 @@ struct BoardView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
                 .shadow(radius: 30)
                 .padding(24)   // ほぼ全画面（周囲だけ余白 = 暗幕クリックで閉じられる）
+
+                markdownPreviewOverlay   // Terminal のさらに上層 (fsl: preview は terminal の上)
             }
             .onExitCommand { closeTerminal() }
             .transition(.opacity)
+        }
+    }
+
+    /// Markdown プレビュー(Terminal モーダルのさらに上のレイヤー)。
+    @ViewBuilder private var markdownPreviewOverlay: some View {
+        if let url = uiState.previewURL {
+            ZStack {
+                Rectangle()
+                    .fill(.black.opacity(0.3))
+                    .ignoresSafeArea()
+                    .onTapGesture { uiState.previewURL = nil }
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.richtext")
+                        Text(url.lastPathComponent).font(.headline).lineLimit(1)
+                        Spacer()
+                        Button { uiState.previewURL = nil } label: {
+                            Image(systemName: "xmark.circle.fill").font(.title3)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("プレビューを閉じる")
+                    }
+                    .padding(10)
+                    Divider()
+                    MarkdownView(text: (try? String(contentsOf: url, encoding: .utf8)) ?? "読み込めませんでした")
+                }
+                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+                .shadow(radius: 30)
+                .padding(60)
+            }
+        }
+    }
+
+    private func openMarkdownPicker(cwd: String?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        var types: [UTType] = [.plainText, .text]
+        if let md = UTType(filenameExtension: "md") { types.insert(md, at: 0) }
+        panel.allowedContentTypes = types
+        if let cwd {
+            panel.directoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            uiState.previewURL = url
         }
     }
 
@@ -114,6 +174,7 @@ struct BoardView: View {
         if let id = uiState.terminalCardID {
             sessions.refreshCwd(for: id, context: context)
         }
+        uiState.previewURL = nil        // fsl: Terminal を閉じるとプレビューも閉じる
         uiState.terminalCardID = nil
     }
 
