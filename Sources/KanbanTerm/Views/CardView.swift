@@ -10,13 +10,20 @@ struct CardFace: View {
     var onOpenTerminal: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 Text(card.title)
                     .font(.body.weight(.medium))
                     .lineLimit(2)
                 Spacer(minLength: 4)
                 AgentBadge(card: card)
+                if showActions {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("カード名を編集")
+                }
             }
             HStack(spacing: 4) {
                 Image(systemName: "folder")
@@ -27,19 +34,16 @@ struct CardFace: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
-                Spacer(minLength: 4)
-                if showActions {
-                    Button(action: onOpenTerminal) {
-                        Image(systemName: "terminal").font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("ターミナルを開く")
-                    Button(action: onEdit) {
-                        Image(systemName: "pencil").font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("カード名を編集")
+            }
+            if showActions {
+                Button(action: onOpenTerminal) {
+                    Label("ターミナルを開く", systemImage: "terminal.fill")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("ターミナルを開く")
             }
         }
         .padding(10)
