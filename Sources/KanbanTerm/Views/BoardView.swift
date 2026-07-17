@@ -11,6 +11,7 @@ struct BoardView: View {
     @State private var sessions = TerminalSessions()
     @State private var caffeine = CaffeineController()
     @State private var showingCaffeine = false
+    @State private var showingTokens = false
 
     var body: some View {
         Group {
@@ -41,6 +42,17 @@ struct BoardView: View {
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
         .navigationTitle("KANBAN Term")
         .toolbar {
+            ToolbarItem {
+                Button {
+                    showingTokens.toggle()
+                } label: {
+                    Image(systemName: "chart.bar.xaxis")
+                }
+                .help("トークン使用量")
+                .popover(isPresented: $showingTokens, arrowEdge: .bottom) {
+                    TokenDashboard()
+                }
+            }
             ToolbarItem {
                 Button {
                     showingCaffeine.toggle()
