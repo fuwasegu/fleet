@@ -11,6 +11,7 @@ final class BoardUIState {
     var dragLocation: CGPoint?                 // "board" 座標系でのカーソル位置
     var cardFrames: [UUID: CGRect] = [:]       // 各カードの "board" 座標系フレーム
     var columnFrames: [UUID: CGRect] = [:]     // 各列の "board" 座標系フレーム
+    var terminalCardID: UUID?                  // ターミナルモーダルを開いているカード(fsl: terminal_open)
 }
 
 extension Color {

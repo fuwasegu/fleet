@@ -86,14 +86,13 @@ struct CardView: View {
 
     @State private var renaming = false
     @State private var draft = ""
-    @State private var showingTerminal = false
 
     var body: some View {
         CardFace(
             card: card,
             showActions: true,
             onEdit: beginRename,
-            onOpenTerminal: { showingTerminal = true }
+            onOpenTerminal: { uiState.terminalCardID = card.id }
         )
             .opacity(isDragging ? 0.05 : 1)
             .onGeometryChange(for: CGRect.self) {
@@ -106,9 +105,6 @@ struct CardView: View {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
                 }
-            }
-            .sheet(isPresented: $showingTerminal) {
-                TerminalModal(title: card.title, directory: card.workingDirPath)
             }
     }
 

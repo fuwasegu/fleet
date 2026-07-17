@@ -6,6 +6,7 @@ struct BoardView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \BoardColumn.order) private var columns: [BoardColumn]
     @State private var uiState = BoardUIState()
+    @State private var sessions = TerminalSessions()
 
     var body: some View {
         Group {
@@ -32,6 +33,8 @@ struct BoardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .coordinateSpace(.named("board"))
         .overlay(alignment: .topLeading) { draggedOverlay }
+        .overlay { terminalOverlay }
+        .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
         .navigationTitle("KANBAN Term")
         .toolbar {
             ToolbarItem {
@@ -39,6 +42,48 @@ struct BoardView: View {
             }
         }
         .environment(uiState)
+    }
+
+    /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。
+    /// 暗幕タップ / Esc / ✕ で閉じる。閉じてもセッションは TerminalSessions が保持。
+    @ViewBuilder private var terminalOverlay: some View {
+        if let id = uiState.terminalCardID,
+           let card = BoardStore(context: context).card(withID: id) {
+            ZStack {
+                Rectangle()
+                    .fill(.black.opacity(0.4))
+                    .ignoresSafeArea()
+                    .onTapGesture { uiState.terminalCardID = nil }
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "terminal")
+                        Text(card.title).font(.headline).lineLimit(1)
+                        Text(card.workingDirPath ?? "~")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        Spacer()
+                        Button {
+                            uiState.terminalCardID = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").font(.title3)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("閉じる (Esc)")
+                    }
+                    .padding(10)
+                    Divider()
+                    TerminalView(cardID: id, directory: card.workingDirPath, sessions: sessions)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+                .shadow(radius: 30)
+                .padding(24)   // ほぼ全画面（周囲だけ余白 = 暗幕クリックで閉じられる）
+            }
+            .onExitCommand { uiState.terminalCardID = nil }
+            .transition(.opacity)
+        }
     }
 
     /// ドラッグ中のカードをカーソルに追従表示（元カードは opacity で隠す）
