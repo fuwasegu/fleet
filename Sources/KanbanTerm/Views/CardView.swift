@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppKit
 import UniformTypeIdentifiers
 import KanbanKit
 
@@ -35,6 +36,14 @@ struct CardFace: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                Spacer(minLength: 4)
+                if let pr = card.prURL, let url = URL(string: pr) {
+                    Button { NSWorkspace.shared.open(url) } label: {
+                        Label("PR", systemImage: "arrow.triangle.branch").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(pr)
+                }
             }
             if showActions {
                 Button(action: onOpenTerminal) {

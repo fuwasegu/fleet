@@ -87,6 +87,11 @@ public struct BoardStore {
         try context.save()
     }
 
+    public func setCardPR(_ card: Card, url: String?) throws {
+        card.prURL = url
+        try context.save()
+    }
+
     public func card(withID id: UUID) -> Card? {
         let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
         return try? context.fetch(descriptor).first
