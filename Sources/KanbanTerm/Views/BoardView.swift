@@ -43,25 +43,6 @@ struct BoardView: View {
         }
         .environment(uiState)
         .environment(sessions)
-        .task { restoreBackgroundSessions() }
-    }
-
-    /// アプリ起動時: Agent自動起動ONのカードをバックグラウンドで起動し、前回セッションを再開する。
-    /// (ターミナルを開かなくても各カードの状態が見える + `claude --continue` で再開)
-    private func restoreBackgroundSessions() {
-        for column in columns {
-            for card in column.cards where card.autoStartAgent {
-                _ = sessions.view(
-                    for: card.id,
-                    directory: card.workingDirPath,
-                    startAgent: true,
-                    dangerSkip: card.dangerSkip,
-                    resume: true,
-                    context: context,
-                    uiState: uiState
-                )
-            }
-        }
     }
 
     /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。

@@ -28,28 +28,33 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        // スピナーは即 Working のヒント。Idle/Blocked の確定はデータ受信時の rescan() に任せる。
         let hasSpinner = title.unicodeScalars.contains { (0x2800...0x28FF).contains($0.value) }
-        if hasSpinner {
-            apply(.working)
-        } else {
-            // 作業停止 → バッファ末尾に承認/入力待ちプロンプトがあれば Blocked、無ければ Idle
-            apply(scanForBlocked() ? .blocked : .idle)
-        }
+        if hasSpinner { apply(.working) }
     }
 
-    /// 画面末尾の数行に既知の承認/入力待ちプロンプトが出ているか (herdr方式)。
-    private func scanForBlocked() -> Bool {
-        guard let t = term?.getTerminal() else { return false }
+    /// バッファ末尾のフッタ文言から状態を判定する(出力が落ち着いた頃に呼ばれる)。
+    func rescan() {
+        guard let t = term?.getTerminal() else { return }
         let rows = t.rows
         var text = ""
-        for r in max(0, rows - 14)..<rows {
+        for r in max(0, rows - 20)..<rows {
             if let line = t.getLine(row: r) {
                 text += line.translateToString(trimRight: true) + "\n"
             }
         }
         let lower = text.lowercased()
-        return lower.contains("do you want")      // Claude の許可プロンプト "Do you want to proceed?" 等
-            || lower.contains("esc to cancel")     // 選択式プロンプトのフッタ
+        let state: AgentState
+        if lower.contains("esc to interrupt") {
+            state = .working                                     // Claude 実行中フッタ
+        } else if lower.contains("do you want")
+                    || lower.contains("esc to cancel")
+                    || lower.contains("enter to select") {
+            state = .blocked                                     // 承認/選択プロンプト
+        } else {
+            state = .idle
+        }
+        apply(state)
     }
 
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
@@ -84,6 +89,22 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     }
 }
 
+/// dataReceived をフックし、出力が落ち着いた頃(250ms デバウンス)にバッファ走査(状態判定)を行う端末view。
+final class MonitoredTerminalView: LocalProcessTerminalView {
+    var onScan: (() -> Void)?
+    private var scanTask: Task<Void, Never>?
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        super.dataReceived(slice: slice)
+        scanTask?.cancel()
+        scanTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.onScan?()
+        }
+    }
+}
+
 /// カード単位のターミナルセッションを保持する。閉じても(非表示にしても)プロセスは生かしたまま。
 @MainActor
 @Observable
@@ -99,7 +120,7 @@ final class TerminalSessions {
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
-        let term = LocalProcessTerminalView(frame: .zero)
+        let term = MonitoredTerminalView(frame: .zero)
 
         let monitor = AgentStateMonitor(
             cardID: cardID,
@@ -108,6 +129,7 @@ final class TerminalSessions {
         )
         term.processDelegate = monitor
         monitor.term = term
+        term.onScan = { [weak monitor] in monitor?.rescan() }
         monitors[cardID] = monitor
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
