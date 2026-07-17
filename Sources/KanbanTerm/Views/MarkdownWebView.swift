@@ -34,6 +34,8 @@ struct MarkdownWebView: NSViewRepresentable {
 }
 
 /// Markdown を埋め込んだ HTML ページを生成する。
+/// レンダリング用ライブラリ(marked / highlight.js / mermaid / DOMPurify)はアプリ同梱の
+/// ローカルアセットをインライン展開する。ネットワーク不要・CDN 非依存・オフラインで動作する。
 enum MarkdownHTML {
     static func page(markdown: String) -> String {
         // JSON 文字列に埋め込む。JSONEncoder は "<" を素通しするため、Markdown 内の
@@ -47,17 +49,12 @@ enum MarkdownHTML {
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css"
-              integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" crossorigin="anonymous">
-        <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
-              integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
-        <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"
-              integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
-        <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"
-              integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous"></script>
-        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"
-              integrity="sha384-Ic7KEGROu37YaruU6NyiYeib7UhjFyDZQ5fzBAji965L75T/4LGk5nzwMEjNGexs" crossorigin="anonymous"></script>
+        <style>\(asset("github-dark.min", "css"))</style>
         <style>\(css)</style>
+        <script>\(js("marked.min"))</script>
+        <script>\(js("highlight.min"))</script>
+        <script>\(js("mermaid.min"))</script>
+        <script>\(js("purify.min"))</script>
         </head><body><div id="content"></div>
         <script>
         window.addEventListener('load', function () {
@@ -90,6 +87,19 @@ enum MarkdownHTML {
         </script>
         </body></html>
         """
+    }
+
+    /// 同梱アセットを文字列で読む(見つからなければ空)。
+    private static func asset(_ name: String, _ ext: String) -> String {
+        guard let url = Bundle.main.url(forResource: name, withExtension: ext),
+              let s = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return s
+    }
+
+    /// 同梱 JS をインライン展開用に読む。ライブラリ内の "</script" が
+    /// インライン script タグを閉じてしまわないよう無害化する。
+    private static func js(_ name: String) -> String {
+        asset(name, "js").replacingOccurrences(of: "</script", with: "<\\/script")
     }
 
     private static let css = """

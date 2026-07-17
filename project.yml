@@ -29,6 +29,8 @@ targets:
     platform: macOS
     sources:
       - Sources/KanbanTerm
+      - path: Resources/markdown
+        buildPhase: resources
     dependencies:
       - target: KanbanKit
         embed: true

@@ -16,10 +16,11 @@
 - フォント（ファミリ/サイズ）を設定できるツールバーを追加（UserDefaults 永続化、開いている全ターミナルへ即時反映）。
 - 残: 配色テーマ。SwiftTerm はカラー設定 API あり。必要になったら。
 
-## Markdown プレビューの強化 → 実装済み
-- **WKWebView + marked.js + highlight.js + mermaid.js** に作り替え済み。mermaid 図・コードのシンタックスハイライト対応。
-- スクリプトは CDN 取得（SRI 付き、バージョン固定）。オフライン時は本文のみ表示（図/装飾は出ない）。
-- 残（任意）: アセット同梱でオフライン完全対応。
+## Markdown プレビューの強化 → 実装済み(オフライン完全対応)
+- **WKWebView + marked.js + highlight.js + mermaid.js + DOMPurify**。mermaid 図・コードのシンタックスハイライト対応。
+- ライブラリはアプリ**同梱**(Resources/markdown)をインライン展開。**ネットワーク不要・CDN 非依存・オフライン動作**。
+- セキュリティ: DOMPurify でサニタイズ、mermaid securityLevel=strict、baseURL=nil(不透明オリジン)、
+  Markdown 埋め込み時の "<"/U+2028/2029 エスケープで script ブレイクアウト遮断。
 
 ## トークン使用量: API 経由（低優先）
 - 現状はローカル transcript(jsonl) 集計で十分（Claude Code のセッション使用量が取れるのはこれ）。
