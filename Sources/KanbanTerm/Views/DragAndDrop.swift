@@ -49,7 +49,9 @@ struct BoardResetDropDelegate: DropDelegate {
     }
 }
 
-/// カード上にホバーした時、方向を考慮してライブ移動（上→下・下→上の双方向で並び替え）
+/// カード上のドロップ処理。
+/// - 同一列内: ホバー中にライブ並び替え（方向考慮）。ソースviewは同じForEach内に残るのでセッションは生存。
+/// - 別列: ドラッグ中は移動しない（ソースviewを破棄しないため）。drop確定時に対象位置へ移動する。
 struct CardDropDelegate: DropDelegate {
     let target: Card
     let column: BoardColumn
@@ -63,20 +65,15 @@ struct CardDropDelegate: DropDelegate {
             guard let dragID = uiState.draggingCardID, dragID != target.id else { return }
             let store = BoardStore(context: context)
             guard let dragged = store.card(withID: dragID) else { return }
+            // 別列のカードはドラッグ中に動かさない（ソースview破棄→セッション孤立を防ぐ）
+            guard dragged.column?.persistentModelID == column.persistentModelID else { return }
 
             let full = column.cards.sorted { $0.order < $1.order }
             let filtered = full.filter { $0.id != dragID }
             guard let base = filtered.firstIndex(where: { $0.id == target.id }) else { return }
-
-            // 同一列内: ドラッグ中カードが対象より上にいれば対象の「後ろ」、下なら「前」へ。
-            // 別列からの流入: dragged はこの列に居ないので対象の「前」に挿入。
-            let insertIndex: Int
-            if let from = full.firstIndex(where: { $0.id == dragID }),
-               let to = full.firstIndex(where: { $0.id == target.id }) {
-                insertIndex = to > from ? base + 1 : base
-            } else {
-                insertIndex = base
-            }
+            guard let from = full.firstIndex(where: { $0.id == dragID }),
+                  let to = full.firstIndex(where: { $0.id == target.id }) else { return }
+            let insertIndex = to > from ? base + 1 : base   // 上→下は後ろ、下→上は前
             withAnimation(.snappy(duration: 0.22)) {
                 try? store.moveCard(dragged, to: column, at: insertIndex)
             }
@@ -84,7 +81,20 @@ struct CardDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        MainActor.assumeIsolated { uiState.draggingCardID = nil }
+        MainActor.assumeIsolated {
+            defer { uiState.draggingCardID = nil }
+            guard let dragID = uiState.draggingCardID else { return }
+            let store = BoardStore(context: context)
+            guard let dragged = store.card(withID: dragID) else { return }
+            // 別列からのドロップ確定 → この列の対象カード位置へ移動
+            if dragged.column?.persistentModelID != column.persistentModelID {
+                let filtered = column.cards.filter { $0.id != dragID }.sorted { $0.order < $1.order }
+                let idx = filtered.firstIndex(where: { $0.id == target.id }) ?? filtered.count
+                withAnimation(.snappy(duration: 0.22)) {
+                    try? store.moveCard(dragged, to: column, at: idx)
+                }
+            }
+        }
         return true
     }
 }
