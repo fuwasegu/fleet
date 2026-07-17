@@ -26,8 +26,9 @@ struct MarkdownWebView: NSViewRepresentable {
         func load(_ md: String, into web: WKWebView) {
             guard md != last else { return }
             last = md
-            web.loadHTMLString(MarkdownHTML.page(markdown: md),
-                               baseURL: URL(string: "https://cdn.jsdelivr.net/"))
+            // baseURL は nil(不透明オリジン)。ローカルの Markdown が実在ホストのオリジンを
+            // 名乗る origin-confusion を防ぐ。CDN スクリプトは crossorigin=anonymous + CORS(*) で読める。
+            web.loadHTMLString(MarkdownHTML.page(markdown: md), baseURL: nil)
         }
     }
 }
@@ -35,7 +36,14 @@ struct MarkdownWebView: NSViewRepresentable {
 /// Markdown を埋め込んだ HTML ページを生成する。
 enum MarkdownHTML {
     static func page(markdown: String) -> String {
-        let json = (try? String(data: JSONEncoder().encode(markdown), encoding: .utf8)) ?? "\"\""
+        // JSON 文字列に埋め込む。JSONEncoder は "<" を素通しするため、Markdown 内の
+        // "</script>" がインライン script を途中終了させ HTML 注入を許す。"<" を < に
+        // 逃がして script ブレイクアウトを防ぐ(U+2028/2029 も JS 文字列を壊すため合わせて逃がす)。
+        let json = (try? String(data: JSONEncoder().encode(markdown), encoding: .utf8))?
+            .replacingOccurrences(of: "<", with: "\\u003C")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+            ?? "\"\""
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -47,6 +55,8 @@ enum MarkdownHTML {
               integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
         <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"
               integrity="sha384-R63zfMfSwJF4xCR11wXii+QUsbiBIdiDzDbtxia72oGWfkT7WHJfmD/I/eeHPJyT" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"
+              integrity="sha384-Ic7KEGROu37YaruU6NyiYeib7UhjFyDZQ5fzBAji965L75T/4LGk5nzwMEjNGexs" crossorigin="anonymous"></script>
         <style>\(css)</style>
         </head><body><div id="content"></div>
         <script>
@@ -54,8 +64,13 @@ enum MarkdownHTML {
           const md = \(json);
           try { marked.setOptions({ breaks: true, gfm: true }); } catch (e) {}
           const el = document.getElementById('content');
-          try { el.innerHTML = marked.parse(md); }
-          catch (e) { const pre = document.createElement('pre'); pre.textContent = md; el.appendChild(pre); return; }
+          try {
+            // 信頼できない Markdown 由来の HTML は DOMPurify で必ずサニタイズ(XSS 対策)
+            const raw = marked.parse(md);
+            el.innerHTML = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+          } catch (e) {
+            const pre = document.createElement('pre'); pre.textContent = md; el.appendChild(pre); return;
+          }
           // ```mermaid を図として描画するため div.mermaid に置換
           el.querySelectorAll('code.language-mermaid').forEach(function (code) {
             const div = document.createElement('div');
@@ -68,7 +83,7 @@ enum MarkdownHTML {
             try { hljs.highlightElement(block); } catch (e) {}
           });
           try {
-            mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+            mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
             mermaid.run({ querySelector: '.mermaid' });
           } catch (e) {}
         });
