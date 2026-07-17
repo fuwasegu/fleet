@@ -167,7 +167,7 @@ struct BoardView: View {
                     }
                     .padding(10)
                     Divider()
-                    MarkdownView(text: (try? String(contentsOf: url, encoding: .utf8)) ?? "読み込めませんでした")
+                    MarkdownWebView(markdown: (try? String(contentsOf: url, encoding: .utf8)) ?? "読み込めませんでした")
                 }
                 .background(.background, in: RoundedRectangle(cornerRadius: 12))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
