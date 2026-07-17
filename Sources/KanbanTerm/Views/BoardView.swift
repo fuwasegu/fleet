@@ -42,6 +42,7 @@ struct BoardView: View {
             }
         }
         .environment(uiState)
+        .environment(sessions)
     }
 
     /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。

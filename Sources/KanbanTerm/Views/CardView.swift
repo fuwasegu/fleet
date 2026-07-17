@@ -78,6 +78,7 @@ struct AgentBadge: View {
 struct CardView: View {
     @Environment(\.modelContext) private var context
     @Environment(BoardUIState.self) private var uiState
+    @Environment(TerminalSessions.self) private var sessions
     @Bindable var card: Card
 
     // ジェスチャ終了/キャンセルで必ず自動リセットされ、移動先の新viewには引き継がれない。
@@ -101,11 +102,29 @@ struct CardView: View {
                 uiState.cardFrames[card.id] = rect
             }
             .gesture(dragGesture)
+            .contextMenu {
+                Button { uiState.terminalCardID = card.id } label: {
+                    Label("ターミナルを開く", systemImage: "terminal")
+                }
+                Button(action: beginRename) {
+                    Label("名前を変更", systemImage: "pencil")
+                }
+                Divider()
+                Button(role: .destructive, action: deleteCard) {
+                    Label("カードを削除", systemImage: "trash")
+                }
+            }
             .sheet(isPresented: $renaming) {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
                 }
             }
+    }
+
+    private func deleteCard() {
+        if uiState.terminalCardID == card.id { uiState.terminalCardID = nil }
+        sessions.close(card.id)
+        do { try BoardStore(context: context).deleteCard(card) } catch {}
     }
 
     private var dragGesture: some Gesture {
