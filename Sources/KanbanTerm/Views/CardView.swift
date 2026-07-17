@@ -143,6 +143,7 @@ struct CardFace: View {
                     Text(num).foregroundStyle(PromptTheme.text.opacity(0.75))
                 }
                 .buttonStyle(.plain)
+                .pointerStyle(.link)   // クリックできると分かるよう指カーソルに
             }
         }
         .font(PromptTheme.mono)

@@ -141,6 +141,7 @@ final class TerminalSessions {
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
         let term = MonitoredTerminalView(frame: .zero)
+        term.font = TerminalSettings.resolvedFont()   // 設定フォントを適用
 
         let monitor = AgentStateMonitor(
             cardID: cardID,
@@ -171,6 +172,12 @@ final class TerminalSessions {
         }
         views[cardID] = term
         return term
+    }
+
+    /// 設定フォントを開いている全ターミナルへ即時反映する。
+    func applyFont() {
+        let font = TerminalSettings.resolvedFont()
+        for term in views.values { term.font = font }
     }
 
     /// カード削除時などにセッションを終了する(SIGTERM)。

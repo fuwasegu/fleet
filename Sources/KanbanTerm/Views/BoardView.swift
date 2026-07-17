@@ -12,6 +12,7 @@ struct BoardView: View {
     @State private var caffeine = CaffeineController()
     @State private var showingCaffeine = false
     @State private var showingTokens = false
+    @State private var showingSettings = false
 
     var body: some View {
         Group {
@@ -64,6 +65,17 @@ struct BoardView: View {
                 .help("スリープ防止 (caffeinate)")
                 .popover(isPresented: $showingCaffeine, arrowEdge: .bottom) {
                     CaffeinePopover(caffeine: caffeine)
+                }
+            }
+            ToolbarItem {
+                Button {
+                    showingSettings.toggle()
+                } label: {
+                    Image(systemName: "textformat.size")
+                }
+                .help("ターミナルのフォント設定")
+                .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
+                    TerminalSettingsPopover(sessions: sessions)
                 }
             }
             ToolbarItem {
