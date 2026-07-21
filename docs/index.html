@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fleet — Command a fleet of Claude Code agents</title>
-<meta name="description" content="並走する Claude Code Agent を「艦隊」として率いる、カンバン × ターミナルの macOS アプリ。">
+<meta name="description" content="Command a fleet of Claude Code agents from a Kanban board × terminal, on macOS.">
 <meta property="og:title" content="Fleet">
-<meta property="og:description" content="並走する Claude Code Agent を艦隊として率いる、カンバン × ターミナルの macOS アプリ。">
+<meta property="og:description" content="Command a fleet of Claude Code agents — a Kanban × terminal cockpit for macOS.">
 <meta property="og:image" content="assets/icon.png">
 <link rel="icon" href="assets/icon.png">
 <style>
@@ -23,44 +23,43 @@
        -webkit-font-smoothing:antialiased;line-height:1.6}
   a{color:var(--blue);text-decoration:none}
   .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
-  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--dim);
-           text-transform:uppercase}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
 
-  /* nav */
+  /* language toggle: default shows EN; html.ja shows JA */
+  [data-i18n]{display:inline}
+  html.ja [lang="en"], html:not(.ja) [lang="ja"]{display:none}
+
   nav{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
   .brand img{width:28px;height:28px;border-radius:7px}
-  nav .links{display:flex;gap:22px;font-family:var(--mono);font-size:13px}
+  nav .links{display:flex;gap:22px;font-family:var(--mono);font-size:13px;align-items:center}
   nav .links a{color:var(--muted)} nav .links a:hover{color:var(--text)}
+  #lang{background:transparent;border:1px solid var(--line);color:var(--muted);
+        font-family:var(--mono);font-size:12px;padding:4px 10px;border-radius:7px;cursor:pointer}
+  #lang:hover{color:var(--text);border-color:var(--muted)}
 
-  /* hero */
   .hero{text-align:center;padding:56px 0 30px}
   .hero .icon{width:104px;height:104px;border-radius:24px;box-shadow:0 20px 50px rgba(0,0,0,.55);margin-bottom:26px}
   .hero h1{font-size:clamp(40px,7vw,72px);margin:.1em 0;letter-spacing:-.02em;font-weight:800}
-  .hero .tag{font-size:clamp(17px,2.4vw,22px);color:var(--text);font-weight:600;margin:0 auto;max-width:22ch}
-  .hero .sub{color:var(--muted);max-width:56ch;margin:16px auto 0}
+  .hero .tag{font-size:clamp(17px,2.4vw,22px);color:var(--text);font-weight:600;margin:0 auto;max-width:30ch}
+  .hero .sub{color:var(--muted);max-width:60ch;margin:16px auto 0}
   .prompt{font-family:var(--mono);color:var(--dim);font-size:14px;margin-top:22px}
   .prompt b{color:var(--green);font-weight:600}
   .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:30px}
-  .btn{display:inline-flex;align-items:center;gap:9px;padding:13px 22px;border-radius:11px;
-       font-weight:600;font-size:15px;font-family:var(--sans)}
+  .btn{display:inline-flex;align-items:center;gap:9px;padding:13px 22px;border-radius:11px;font-weight:600;font-size:15px}
   .btn.primary{background:var(--green);color:#05210f}
   .btn.primary:hover{filter:brightness(1.08)}
   .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
   .btn.ghost:hover{border-color:var(--muted)}
   .req{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
 
-  /* screenshot */
-  .shot{margin:44px auto 0;max-width:960px;border:1px solid var(--line);border-radius:16px;
-        overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.55)}
+  .shot{margin:44px auto 0;max-width:960px;border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.55)}
   .shot img{display:block;width:100%}
 
-  /* section */
   section{padding:72px 0}
   .shead{text-align:center;margin-bottom:40px}
   .shead h2{font-size:clamp(26px,4vw,36px);font-weight:800;letter-spacing:-.01em;margin:.3em 0 0}
 
-  /* features */
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
   .card .k{font-family:var(--mono);font-size:12px;letter-spacing:.06em;margin-bottom:10px}
@@ -69,23 +68,17 @@
   .tag-blocked{color:var(--red)} .tag-working{color:var(--green)}
   .tag-blue{color:var(--blue)} .tag-amber{color:var(--amber)} .tag-mut{color:var(--muted)}
 
-  /* fleet blurb */
-  .blurb{background:linear-gradient(150deg,#12171b,#0b0d0f);border:1px solid var(--line);
-         border-radius:16px;padding:40px;text-align:center}
-  .blurb p{max-width:60ch;margin:0 auto;color:var(--muted)}
+  .blurb{background:linear-gradient(150deg,#12171b,#0b0d0f);border:1px solid var(--line);border-radius:16px;padding:40px;text-align:center}
+  .blurb p{max-width:62ch;margin:0 auto;color:var(--muted)}
   .blurb b{color:var(--text)}
 
-  /* install */
   .install ol{max-width:640px;margin:0 auto;padding-left:22px;color:var(--muted)}
   .install li{margin:10px 0}
   code,pre{font-family:var(--mono)}
-  pre{background:#0E0F11;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
-      overflow-x:auto;color:var(--text);font-size:13px}
-  .warn{border-left:3px solid var(--amber);background:#171410;border-radius:0 10px 10px 0;
-        padding:12px 16px;color:var(--muted);font-size:14px;max-width:640px;margin:0 auto 22px}
+  pre{background:#0E0F11;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;color:var(--text);font-size:13px}
+  .warn{border-left:3px solid var(--amber);background:#171410;border-radius:0 10px 10px 0;padding:12px 16px;color:var(--muted);font-size:14px;max-width:640px;margin:0 auto 22px}
 
-  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);
-         font-family:var(--mono);font-size:13px;text-align:center}
+  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);font-family:var(--mono);font-size:13px;text-align:center}
   @media(max-width:760px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -94,9 +87,10 @@
   <nav>
     <div class="brand"><img src="assets/icon.png" alt="Fleet"> Fleet</div>
     <div class="links">
-      <a href="#features">Features</a>
-      <a href="#install">Install</a>
+      <a href="#features"><span lang="en">Features</span><span lang="ja">特徴</span></a>
+      <a href="#install"><span lang="en">Install</span><span lang="ja">導入</span></a>
       <a href="https://github.com/fuwasegu/fleet">GitHub</a>
+      <button id="lang" type="button"><span lang="en">日本語</span><span lang="ja">English</span></button>
     </div>
   </nav>
 
@@ -104,53 +98,62 @@
     <img class="icon" src="assets/icon.png" alt="Fleet icon">
     <div class="eyebrow">macOS · Kanban × Terminal</div>
     <h1>Fleet</h1>
-    <p class="tag">並走する Claude Code Agent を「艦隊」として率いる。</p>
-    <p class="sub">複数の Claude Code セッションをカンバンのカードとして並べ、どのエージェントが何をしているか（稼働中・承認待ち・完了）を、ターミナルを開かずに一望する macOS アプリ。</p>
+    <p class="tag">
+      <span lang="en">Command a fleet of Claude Code agents.</span>
+      <span lang="ja">並走する Claude Code エージェントを「艦隊」として率いる。</span>
+    </p>
+    <p class="sub">
+      <span lang="en">Line up your Claude Code sessions as cards on a Kanban board and see which agent is working, waiting for approval, or done — without opening a single terminal.</span>
+      <span lang="ja">複数の Claude Code セッションをカンバンのカードとして並べ、どのエージェントが動作中か・承認待ちか・完了したかを、ターミナルを開かずに一望する macOS アプリ。</span>
+    </p>
     <div class="prompt">$ launch a <b>fleet</b> of agents ▸</div>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/fuwasegu/fleet/releases/latest">▸ ダウンロード</a>
-      <a class="btn ghost" href="https://github.com/fuwasegu/fleet">GitHub で見る</a>
+      <a class="btn primary" href="https://github.com/fuwasegu/fleet/releases/latest">▸ <span lang="en">Download</span><span lang="ja">ダウンロード</span></a>
+      <a class="btn ghost" href="https://github.com/fuwasegu/fleet"><span lang="en">View on GitHub</span><span lang="ja">GitHub で見る</span></a>
     </div>
-    <div class="req">macOS 26+ · 無料・オープンソース (MIT) · 未署名ビルド</div>
+    <div class="req">
+      <span lang="en">macOS 26+ · Free &amp; open source (MIT) · self-signed build</span>
+      <span lang="ja">macOS 26+ · 無料・オープンソース (MIT) · 自己署名ビルド</span>
+    </div>
   </header>
 
-  <div class="shot"><img src="assets/hero.png" alt="Fleet のスクリーンショット"></div>
+  <div class="shot"><img src="assets/hero.png" alt="Fleet board"></div>
 
   <section id="features">
     <div class="shead">
       <div class="eyebrow">What it does</div>
-      <h2>ターミナルを開かずに、艦隊を把握する</h2>
+      <h2><span lang="en">Know your fleet without opening a terminal</span><span lang="ja">ターミナルを開かずに、艦隊を把握する</span></h2>
     </div>
     <div class="grid">
       <div class="card">
         <div class="k"><span class="tag-working">● WORKING</span> / <span class="tag-blocked">● BLOCKED</span></div>
-        <h3>Agent 状態の自動検出</h3>
-        <p>稼働中・承認待ち・完了・待機を端末出力から判定。稼働機はレーダーのブリップのように脈打つ。</p>
+        <h3><span lang="en">Live agent status</span><span lang="ja">Agent 状態の自動検出</span></h3>
+        <p><span lang="en">Working, blocked, done or idle — detected from each terminal. The active agent pulses like a radar blip.</span><span lang="ja">稼働中・承認待ち・完了・待機を端末出力から判定。稼働機はレーダーのブリップのように脈打つ。</span></p>
       </div>
       <div class="card">
         <div class="k tag-blocked">$ approve? (y/n)</div>
-        <h3>承認待ちの「実際の問い」</h3>
-        <p>ブロック中のエージェントが何を尋ねているかをカード上に表示。点滅キャレット付き。</p>
+        <h3><span lang="en">The actual question</span><span lang="ja">承認待ちの「実際の問い」</span></h3>
+        <p><span lang="en">A blocked agent shows exactly what it's asking, right on the card, with a blinking caret.</span><span lang="ja">ブロック中のエージェントが何を尋ねているかをカード上に表示。点滅キャレット付き。</span></p>
       </div>
       <div class="card">
         <div class="k tag-mut">▸ open terminal</div>
-        <h3>フル装備のターミナル</h3>
-        <p>カードから全画面ターミナル（SwiftTerm）を起動。閉じてもセッションは生き続ける。</p>
+        <h3><span lang="en">A full terminal per card</span><span lang="ja">フル装備のターミナル</span></h3>
+        <p><span lang="en">Launch a real terminal (SwiftTerm) full-screen from any card. The session keeps running after you close it.</span><span lang="ja">カードから全画面ターミナル（SwiftTerm）を起動。閉じてもセッションは動き続ける。</span></p>
       </div>
       <div class="card">
-        <div class="k tag-blue">⎇ branch · #PR</div>
-        <h3>cwd / ブランチ / PR</h3>
-        <p>作業ディレクトリ・現在ブランチ・GitHub PR をカードに集約。ホバーで全文表示。</p>
+        <div class="k tag-mut">↺ claude --resume</div>
+        <h3><span lang="en">Resume past sessions</span><span lang="ja">過去セッションから再開</span></h3>
+        <p><span lang="en">Pick a previous Claude Code session — with a preview of its last conversation, so you never resume the wrong one.</span><span lang="ja">以前のセッションを直近会話のプレビュー付きで選んで再開。誤ったセッションを掴まない。</span></p>
       </div>
       <div class="card">
         <div class="k tag-amber">◇ mermaid</div>
-        <h3>Markdown プレビュー</h3>
-        <p>mermaid 作図とシンタックスハイライトに対応。ネットワーク不要のオフライン描画。</p>
+        <h3><span lang="en">Context &amp; Markdown</span><span lang="ja">文脈 & Markdown</span></h3>
+        <p><span lang="en">cwd, git branch and linked PR on every card. Markdown preview with Mermaid and syntax highlighting, fully offline.</span><span lang="ja">cwd・ブランチ・PR をカードに集約。mermaid 図とシンタックスハイライト対応の Markdown プレビュー（オフライン）。</span></p>
       </div>
       <div class="card">
-        <div class="k tag-mut">◐ themes · 集計</div>
-        <h3>テーマ & トークン使用量</h3>
-        <p>ターミナルの配色/フォント設定、Claude Code のトークン使用量を期間別に集計。</p>
+        <div class="k tag-mut">◐ themes · 🌐</div>
+        <h3><span lang="en">Make it yours</span><span lang="ja">自分好みに</span></h3>
+        <p><span lang="en">Terminal color themes and fonts, a token-usage dashboard, drag-to-reorder columns, English / Japanese UI.</span><span lang="ja">ターミナルのテーマ/フォント、トークン使用量、列の並べ替え、英語/日本語 UI。</span></p>
       </div>
     </div>
   </section>
@@ -158,28 +161,39 @@
   <section>
     <div class="blurb">
       <div class="eyebrow">Why "Fleet"</div>
-      <p style="margin-top:14px;font-size:18px"><b>並走する Agent は、一隻ずつではなく艦隊で動く。</b><br>
-      Fleet はローカル完結の司令塔として、散らばったセッションを一枚のレーダーに集約する。</p>
+      <p style="margin-top:14px;font-size:18px">
+        <span lang="en"><b>Agents running side by side move as a fleet, not one ship at a time.</b><br>Fleet is a local, offline cockpit that gathers your scattered sessions onto a single radar.</span>
+        <span lang="ja"><b>並走する Agent は、一隻ずつではなく艦隊で動く。</b><br>Fleet はローカル完結の司令塔として、散らばったセッションを一枚のレーダーに集約する。</span>
+      </p>
     </div>
   </section>
 
   <section id="install" class="install">
     <div class="shead">
       <div class="eyebrow">Install</div>
-      <h2>導入</h2>
+      <h2><span lang="en">Install</span><span lang="ja">導入</span></h2>
     </div>
-    <p style="text-align:center;color:var(--muted);margin:-10px auto 26px;max-width:52ch">要件: <b style="color:var(--text)">macOS 26+</b></p>
+    <p style="text-align:center;color:var(--muted);margin:-10px auto 26px">
+      <span lang="en">Requires <b style="color:var(--text)">macOS 26+</b></span>
+      <span lang="ja">要件: <b style="color:var(--text)">macOS 26+</b></span>
+    </p>
 
-    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--green)">HOMEBREW（推奨）</h3>
+    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--green)">HOMEBREW</h3>
     <pre style="max-width:640px;margin:8px auto 8px">brew install --cask fuwasegu/tap/fleet</pre>
-    <p style="text-align:center;color:var(--dim);font-size:13px;margin:0 auto 30px">cask が検疫属性を自動除去するので、そのまま起動できます。</p>
+    <p style="text-align:center;color:var(--dim);font-size:13px;margin:0 auto 30px">
+      <span lang="en">The cask removes the quarantine flag, so it just launches.</span>
+      <span lang="ja">cask が検疫属性を自動除去するので、そのまま起動できます。</span>
+    </p>
 
-    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--muted)">手動</h3>
-    <div class="warn">⚠️ 手動導入は未署名・未 notarize のため、初回起動は Gatekeeper に弾かれます。<b>右クリック → 開く</b>、または下記で検疫属性を除去してください。</div>
+    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--muted)"><span lang="en">MANUAL</span><span lang="ja">手動</span></h3>
+    <div class="warn">
+      <span lang="en">⚠️ The manual build is self-signed and not notarized, so the first launch is blocked by Gatekeeper. <b>Right-click → Open</b>, or strip the quarantine flag below.</span>
+      <span lang="ja">⚠️ 手動導入は自己署名・未 notarize のため、初回起動は Gatekeeper に弾かれます。<b>右クリック → 開く</b>、または下記で検疫属性を除去してください。</span>
+    </div>
     <ol>
-      <li><a href="https://github.com/fuwasegu/fleet/releases/latest">Releases</a> から <code>Fleet.app.zip</code> をダウンロードし展開</li>
-      <li><code>Fleet.app</code> を <code>/Applications</code> へ移動</li>
-      <li>初回のみ <b>右クリック → 開く</b>、または:
+      <li><span lang="en">Download and unzip <code>Fleet.app.zip</code> from <a href="https://github.com/fuwasegu/fleet/releases/latest">Releases</a></span><span lang="ja"><a href="https://github.com/fuwasegu/fleet/releases/latest">Releases</a> から <code>Fleet.app.zip</code> をダウンロードし展開</span></li>
+      <li><span lang="en">Move <code>Fleet.app</code> to <code>/Applications</code></span><span lang="ja"><code>Fleet.app</code> を <code>/Applications</code> へ移動</span></li>
+      <li><span lang="en"><b>Right-click → Open</b> the first time, or:</span><span lang="ja">初回のみ <b>右クリック → 開く</b>、または:</span>
         <pre>xattr -dr com.apple.quarantine /Applications/Fleet.app</pre>
       </li>
     </ol>
@@ -189,5 +203,22 @@
 <footer>
   <div class="wrap">Fleet · MIT License · <a href="https://github.com/fuwasegu/fleet">github.com/fuwasegu/fleet</a></div>
 </footer>
+
+<script>
+  (function () {
+    var saved = localStorage.getItem('fleet-lang');
+    var lang = saved || (navigator.language && navigator.language.toLowerCase().startsWith('ja') ? 'ja' : 'en');
+    function apply(l) {
+      document.documentElement.classList.toggle('ja', l === 'ja');
+      document.documentElement.setAttribute('lang', l);
+    }
+    apply(lang);
+    document.getElementById('lang').addEventListener('click', function () {
+      lang = document.documentElement.classList.contains('ja') ? 'en' : 'ja';
+      localStorage.setItem('fleet-lang', lang);
+      apply(lang);
+    });
+  })();
+</script>
 </body>
 </html>
