@@ -18,6 +18,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     private let isViewing: () -> Bool
     private var lastState: AgentState = .unknown
     private var idleConfirmTask: Task<Void, Never>?   // Idle 即断防止(ストリーミング中のチラつき対策)
+    private var latestTitle: String = ""              // 直近の OSC タイトル(Working/Idle の主信号)
     weak var term: LocalProcessTerminalView?   // Blocked判定のバッファ走査用
 
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
@@ -28,17 +29,19 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
 
+    // OSC タイトルは Working/Idle の主信号(herdr 方式)。Claude は稼働中は点字スピナー、
+    // 待機中は ✳ をタイトル先頭に出す。ストリーミング出力に押し流されず安定している。
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        // スピナーは即 Working のヒント。Idle/Blocked の確定はデータ受信時の rescan() に任せる。
-        let hasSpinner = title.unicodeScalars.contains { (0x2800...0x28FF).contains($0.value) }
-        if hasSpinner { apply(.working) }
+        latestTitle = title
+        evaluate()
     }
 
-    /// バッファ末尾のフッタ文言から状態を判定する(出力が落ち着いた頃に呼ばれる)。
-    /// Idle は即断せず 700ms 後に再確認する。ストリーミング中に一瞬フッタが走査窓から
-    /// 外れて Idle に見えても、出力再開で Working に戻る間はキャンセルされ、Done がチラつかない。
-    func rescan() {
-        let (state, question) = classify()
+    /// データ受信(デバウンス後)で呼ばれる。タイトル + バッファから状態を判定する。
+    func rescan() { evaluate() }
+
+    /// 判定を実行して適用する。Idle は即断せず 700ms 後に再確認(チラつき防止)。
+    private func evaluate() {
+        guard let (state, question) = classify() else { return }   // 不明なら状態を変えない
         if state == .idle {
             scheduleIdleConfirm()
         } else {
@@ -46,26 +49,66 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         }
     }
 
-    /// 現在のバッファ末尾から状態を判定する(副作用なし)。
-    private func classify() -> (AgentState, String?) {
-        guard let t = term?.getTerminal() else { return (lastState, nil) }
+    /// herdr 方式の優先度付き判定。判定不能なら nil(状態維持)。
+    /// 1. タイトル先頭がスピナー → Working   2. バッファに権限/選択プロンプト → Blocked
+    /// 3. タイトル先頭が ✳ or プロンプトボックスに ❯ → Idle   4. フォールバックでフッタ走査
+    private func classify() -> (AgentState, String?)? {
+        // 1) OSC タイトルのスピナー(点字 U+2800–28FF)= 稼働中(最優先)
+        if let first = latestTitle.unicodeScalars.first, (0x2800...0x28FF).contains(first.value) {
+            return (.working, nil)
+        }
+
+        let lines = bottomLines(24)
+        let lower = lines.joined(separator: "\n").lowercased()
+
+        // 2) 権限/選択プロンプト = Blocked(構造ごと照合して誤検出を抑える)
+        if isBlockedPrompt(lower) {
+            return (.blocked, Self.extractQuestion(from: lines))
+        }
+
+        // 3) Idle: タイトル先頭が ✳(U+2733) or 入力プロンプト行(❯)が出ている
+        if latestTitle.unicodeScalars.first?.value == 0x2733 || hasIdlePromptCaret(lines) {
+            return (.idle, nil)
+        }
+
+        // 4) フォールバック: 実行中フッタ
+        if lower.contains("esc to interrupt") { return (.working, nil) }
+
+        return nil   // 判定不能 → 状態維持
+    }
+
+    /// 権限プロンプト/選択フォーム(Blocked)の構造照合。
+    private func isBlockedPrompt(_ lower: String) -> Bool {
+        // 権限プロンプト
+        if lower.contains("do you want to proceed?") { return true }
+        if lower.contains("do you want to") && (lower.contains("yes") || lower.contains("❯")) { return true }
+        if lower.contains("would you like to") && (lower.contains("yes") || lower.contains("❯")) { return true }
+        if lower.contains("waiting for permission") { return true }
+        // 選択フォーム(esc to cancel + ナビゲーション導線)
+        if lower.contains("esc to cancel")
+            && (lower.contains("enter to select")
+                || lower.contains("to navigate")
+                || lower.contains("arrow keys")) { return true }
+        return false
+    }
+
+    /// 入力待ちのプロンプトキャレット(❯)が出ているか。ただしブロッカー文言があるときは除外。
+    private func hasIdlePromptCaret(_ lines: [String]) -> Bool {
+        let lower = lines.joined(separator: "\n").lowercased()
+        guard !lower.contains("enter to select"), !lower.contains("esc to cancel") else { return false }
+        return lines.contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
+    }
+
+    private func bottomLines(_ n: Int) -> [String] {
+        guard let t = term?.getTerminal() else { return [] }
         let rows = t.rows
         var lines: [String] = []
-        for r in max(0, rows - 20)..<rows {
+        for r in max(0, rows - n)..<rows {
             if let line = t.getLine(row: r) {
                 lines.append(line.translateToString(trimRight: true))
             }
         }
-        let lower = lines.joined(separator: "\n").lowercased()
-        if lower.contains("esc to interrupt") {
-            return (.working, nil)                               // Claude 実行中フッタ
-        } else if lower.contains("do you want")
-                    || lower.contains("esc to cancel")
-                    || lower.contains("enter to select") {
-            return (.blocked, Self.extractQuestion(from: lines)) // 承認/選択プロンプト
-        } else {
-            return (.idle, nil)
-        }
+        return lines
     }
 
     /// Idle を 700ms 後に再確認して確定する(その間に Working/Blocked になればキャンセル)。
@@ -74,8 +117,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         idleConfirmTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled, let self else { return }
-            let (state, question) = self.classify()
-            self.apply(state, question: question)
+            if let (state, question) = self.classify() { self.apply(state, question: question) }
         }
     }
 
