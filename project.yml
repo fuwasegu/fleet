@@ -25,6 +25,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.fuwasegu.KanbanKit
         GENERATE_INFOPLIST_FILE: "YES"
         DEFINES_MODULE: "YES"
+  fleet-bridge:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/fleet-bridge
+    settings:
+      base:
+        PRODUCT_NAME: fleet-bridge
+        CODE_SIGNING_ALLOWED: "NO"
   Fleet:
     type: application
     platform: macOS
@@ -37,6 +46,9 @@ targets:
       - target: KanbanKit
         embed: true
       - package: SwiftTerm
+      - target: fleet-bridge
+        copy:
+          destination: executables   # Contents/MacOS/fleet-bridge に同梱
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.fuwasegu.Fleet
