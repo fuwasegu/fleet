@@ -30,12 +30,35 @@ public final class BoardColumn {
     }
 }
 
+/// A2A 共有メモリのチャンネル(＝盤面でつないだカードのクラスタ)。
+/// メモリ本体は SwiftData ではなく ~/.fleet/channels/<id>/memory.jsonl に置く(別プロセスの
+/// fleet-bridge と共有するため)。この Model は所属関係とメタだけを持つ。
+@Model
+public final class Channel {
+    public var id: UUID
+    public var name: String
+    public var createdAt: Date
+    public var colorHex: String?
+
+    @Relationship(inverse: \Card.channel)
+    public var cards: [Card]
+
+    public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), colorHex: String? = nil) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.colorHex = colorHex
+        self.cards = []
+    }
+}
+
 @Model
 public final class Card {
     public var id: UUID
     public var title: String
     public var order: Int
     public var column: BoardColumn?
+    public var channel: Channel?   // A2A: 所属する共有メモリチャンネル(0..1)
 
     // 宣言時デフォルト値は SwiftData の軽量マイグレーション(既存ストアへ属性追加)に必須。
     public var workingDirPath: String? = nil

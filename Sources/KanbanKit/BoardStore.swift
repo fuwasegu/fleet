@@ -156,6 +156,73 @@ public struct BoardStore {
         try context.save()
     }
 
+    // MARK: - Channel (A2A 共有メモリ)
+
+    private static let channelColors = ["7FD962", "6FB0FF", "FF9F0A", "BF5AF2", "FF375F", "32D74B", "FFD60A"]
+
+    public func channels() throws -> [Channel] {
+        try context.fetch(FetchDescriptor<Channel>())
+    }
+
+    public func channel(withID id: UUID) -> Channel? {
+        let d = FetchDescriptor<Channel>(predicate: #Predicate { $0.id == id })
+        return try? context.fetch(d).first
+    }
+
+    /// 2枚のカードを同一チャンネル(共有メモリ)へ。無ければ新規、片方所属なら合流、両方別なら合流。
+    @discardableResult
+    public func connectCards(_ a: Card, _ b: Card) throws -> Channel? {
+        guard a.id != b.id else { return a.channel }
+        if let ch = a.channel, ch.id == b.channel?.id { return ch }   // 既に同一
+
+        let channel: Channel
+        switch (a.channel, b.channel) {
+        case (nil, nil):
+            let color = Self.channelColors[(try channels().count) % Self.channelColors.count]
+            let ch = Channel(name: defaultChannelName(a, b), colorHex: color)
+            context.insert(ch)
+            a.channel = ch; b.channel = ch
+            channel = ch
+        case (let ca?, nil):
+            b.channel = ca; channel = ca
+        case (nil, let cb?):
+            a.channel = cb; channel = cb
+        case (let ca?, let cb?):
+            // cb を ca へ合流(メモリも移す)
+            ChannelStore.mergeMemory(from: cb.id, into: ca.id)
+            for c in cb.cards { c.channel = ca }
+            ChannelStore.removeDir(for: cb.id)
+            context.delete(cb)
+            channel = ca
+        }
+        try context.save()
+        ChannelStore.writePeers(channel.cards.map(\.title), for: channel.id)
+        return channel
+    }
+
+    /// カードをチャンネルから外す。残り1枚以下になったチャンネルは解散する。
+    public func disconnectCard(_ card: Card) throws {
+        guard let ch = card.channel else { return }
+        card.channel = nil
+        try context.save()
+        if ch.cards.count < 2 {
+            for c in ch.cards { c.channel = nil }
+            ChannelStore.removeDir(for: ch.id)
+            context.delete(ch)
+            try context.save()
+        } else {
+            ChannelStore.writePeers(ch.cards.map(\.title), for: ch.id)
+        }
+    }
+
+    private func defaultChannelName(_ a: Card, _ b: Card) -> String {
+        if let p = a.workingDirPath, !p.isEmpty {
+            let base = (p as NSString).lastPathComponent
+            if !base.isEmpty { return base }
+        }
+        return a.title.isEmpty ? "channel" : String(a.title.prefix(20))
+    }
+
     // MARK: - order 正規化 (0..n-1)
 
     private func normalizeColumnOrders() {

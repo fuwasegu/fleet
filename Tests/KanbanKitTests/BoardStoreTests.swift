@@ -8,7 +8,7 @@ struct BoardStoreTests {
 
     private func makeStore() throws -> BoardStore {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: BoardColumn.self, Card.self, configurations: config)
+        let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, configurations: config)
         return BoardStore(context: ModelContext(container))
     }
 
@@ -207,6 +207,61 @@ struct BoardStoreTests {
             #expect(card.blockedPrompt == nil)
             #expect(card.isDone == false)
         }
+    }
+
+    // MARK: - Channel (A2A)
+
+    @Test func connectCreatesSharedChannel() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let ch = try store.connectCards(a, b)
+        #expect(ch != nil)
+        #expect(a.channel?.id == ch?.id)
+        #expect(b.channel?.id == ch?.id)
+        #expect(ch?.cards.count == 2)
+    }
+
+    @Test func connectThirdJoinsExistingChannel() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let c = try store.addCard(title: "c", to: col)
+        let ch = try store.connectCards(a, b)
+        _ = try store.connectCards(b, c)   // c を既存チャンネルへ
+        #expect(c.channel?.id == ch?.id)
+        #expect(ch?.cards.count == 3)
+        #expect(try store.channels().count == 1)
+    }
+
+    @Test func connectTwoChannelsMerges() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let c = try store.addCard(title: "c", to: col)
+        let d = try store.addCard(title: "d", to: col)
+        _ = try store.connectCards(a, b)   // ch1
+        _ = try store.connectCards(c, d)   // ch2
+        #expect(try store.channels().count == 2)
+        _ = try store.connectCards(b, c)   // 合流
+        #expect(try store.channels().count == 1)
+        #expect(a.channel?.id == d.channel?.id)
+        #expect(a.channel?.cards.count == 4)
+    }
+
+    @Test func disconnectDissolvesWhenBelowTwo() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        _ = try store.connectCards(a, b)
+        try store.disconnectCard(a)   // 残り1枚 → 解散
+        #expect(a.channel == nil)
+        #expect(b.channel == nil)
+        #expect(try store.channels().isEmpty)
     }
 
     @Test func deleteCardNormalizesOrders() throws {
