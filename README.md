@@ -34,6 +34,7 @@ Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.c
 
 ## Features
 
+- **Shared context between agents (A2A)** — connect cards with a curve to put their agents in one context channel. Each agent gets `fleet_recall` / `fleet_remember` / `fleet_peers` tools (via a bundled local MCP server) to read and write a shared memory, so parallel agents stop duplicating work and diverging. All local — no cloud.
 - **Agent status at a glance** — Working / Blocked / Done / Idle, detected automatically from each terminal (OSC title + structured matching, inspired by herdr). Blocked cards show the agent's *actual* question.
 - **A full terminal per card** — launch a real terminal (SwiftTerm) full-screen from any card; the session keeps running after you close it.
 - **Resume past sessions** — pick a previous Claude Code session (`claude --resume`) with a preview of its last conversation, so you never resume the wrong one.
