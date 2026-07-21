@@ -76,4 +76,16 @@ git tag v0.2.0 && git push origin v0.2.0
 - 手動でビルドだけ検証したい場合は Actions から `Release` を **workflow_dispatch** 実行（Release は作らず zip を artifact 出力）。
 - リポジトリ secret に `TAP_GITHUB_TOKEN`（`fuwasegu/homebrew-tap` へ push 可能な PAT）を登録すると、Homebrew cask の version / sha256 も自動更新される。
 
+### コード署名（自己署名）
+
+配布ビルドは **自己署名の安定した証明書**で署名する。これにより macOS の TCC が権限付与
+（フルディスクアクセス等）を安定した identity に紐付けて記憶し、更新のたびに権限確認が
+再表示されるのを防ぐ（未署名だと毎回聞かれる）。Gatekeeper 対策ではない（notarize は別途 #4）。
+
+- CI は secret `SIGNING_CERT_P12_BASE64` / `SIGNING_CERT_PASSWORD` があれば
+  `scripts/sign-app.sh` で署名する（未設定なら未署名のまま継続）。
+- 署名鍵（`.p12`）はリポジトリに置かない。ローカル控えは `~/Library/Application Support/Fleet/signing/`。
+- 同じ証明書で署名し続ける限り Designated Requirement が一定になり、ユーザーの権限付与が維持される。
+  証明書を作り直すと DR が変わり、ユーザーは一度だけ再付与が必要。
+
 要件: macOS 26+, Xcode 26+, Swift 6。開発ツールとして **非サンドボックス**で動かす想定（後続スライスのプロセス列挙のため）。

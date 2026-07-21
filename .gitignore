@@ -20,3 +20,8 @@ xcuserdata/
 
 # Misc
 *.log
+
+# Signing (never commit private keys)
+*.p12
+*.pem
+signing/

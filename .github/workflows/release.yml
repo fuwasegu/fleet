@@ -45,6 +45,12 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Sign (self-signed, optional)
+        env:
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: bash scripts/sign-app.sh "build/dd/Build/Products/Release/Fleet.app"
+
       - name: Package (zip, no xattr)
         run: |
           APP="build/dd/Build/Products/Release/Fleet.app"
