@@ -17,6 +17,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     private let context: ModelContext
     private let isViewing: () -> Bool
     private var lastState: AgentState = .unknown
+    private var idleConfirmTask: Task<Void, Never>?   // Idle 即断防止(ストリーミング中のチラつき対策)
     weak var term: LocalProcessTerminalView?   // Blocked判定のバッファ走査用
 
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
@@ -34,8 +35,20 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     }
 
     /// バッファ末尾のフッタ文言から状態を判定する(出力が落ち着いた頃に呼ばれる)。
+    /// Idle は即断せず 700ms 後に再確認する。ストリーミング中に一瞬フッタが走査窓から
+    /// 外れて Idle に見えても、出力再開で Working に戻る間はキャンセルされ、Done がチラつかない。
     func rescan() {
-        guard let t = term?.getTerminal() else { return }
+        let (state, question) = classify()
+        if state == .idle {
+            scheduleIdleConfirm()
+        } else {
+            apply(state, question: question)   // Working/Blocked は即適用(apply が保留 Idle をキャンセル)
+        }
+    }
+
+    /// 現在のバッファ末尾から状態を判定する(副作用なし)。
+    private func classify() -> (AgentState, String?) {
+        guard let t = term?.getTerminal() else { return (lastState, nil) }
         let rows = t.rows
         var lines: [String] = []
         for r in max(0, rows - 20)..<rows {
@@ -44,19 +57,26 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
             }
         }
         let lower = lines.joined(separator: "\n").lowercased()
-        let state: AgentState
-        var question: String? = nil
         if lower.contains("esc to interrupt") {
-            state = .working                                     // Claude 実行中フッタ
+            return (.working, nil)                               // Claude 実行中フッタ
         } else if lower.contains("do you want")
                     || lower.contains("esc to cancel")
                     || lower.contains("enter to select") {
-            state = .blocked                                     // 承認/選択プロンプト
-            question = Self.extractQuestion(from: lines)         // 実際の問いをカードに出す(design C)
+            return (.blocked, Self.extractQuestion(from: lines)) // 承認/選択プロンプト
         } else {
-            state = .idle
+            return (.idle, nil)
         }
-        apply(state, question: question)
+    }
+
+    /// Idle を 700ms 後に再確認して確定する(その間に Working/Blocked になればキャンセル)。
+    private func scheduleIdleConfirm() {
+        idleConfirmTask?.cancel()
+        idleConfirmTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, let self else { return }
+            let (state, question) = self.classify()
+            self.apply(state, question: question)
+        }
     }
 
     /// 承認ボックスの問い(例: "Do you want to make this edit?")を1行取り出す。罫線・記号は除去。
@@ -85,6 +105,8 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     }
 
     private func apply(_ state: AgentState, question: String? = nil) {
+        // Working/Blocked が来たら保留中の Idle 確定を取り消す(チラつき防止)。
+        if state != .idle { idleConfirmTask?.cancel(); idleConfirmTask = nil }
         guard let card = BoardStore(context: context).card(withID: cardID) else { return }
         var changed = false
         if isViewing() {

@@ -192,13 +192,15 @@ struct StatusGlyph: View {
     let color: Color
     let spin: Bool
     var ping: Bool = false
-    @State private var angle = 0.0
+    @State private var rotate = false
     @State private var pinging = false
 
     var body: some View {
         Text(glyph)
             .foregroundStyle(color)
-            .rotationEffect(.degrees(spin ? angle : 0))
+            .rotationEffect(.degrees(rotate ? 360 : 0))
+            .animation(spin ? .linear(duration: 1.4).repeatForever(autoreverses: false) : .default,
+                       value: rotate)
             .background {
                 // レーダーのブリップ: リングが広がって消える
                 if ping {
@@ -207,20 +209,20 @@ struct StatusGlyph: View {
                         .frame(width: 16, height: 16)
                         .scaleEffect(pinging ? 2.4 : 0.5)
                         .opacity(pinging ? 0 : 0.8)
+                        .animation(.easeOut(duration: 1.8).repeatForever(autoreverses: false),
+                                   value: pinging)
                 }
             }
-            .onAppear {
-                if spin {
-                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                        angle = 360
-                    }
-                }
-                if ping {
-                    withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
-                        pinging = true
-                    }
-                }
-            }
+            // onAppear だけでなく状態変化でも開始/停止する
+            // (カードは READY で現れてから Working/Blocked になるため onAppear のみだと発火しない)
+            .onAppear { sync() }
+            .onChange(of: spin) { _, _ in sync() }
+            .onChange(of: ping) { _, _ in sync() }
+    }
+
+    private func sync() {
+        rotate = spin
+        pinging = ping
     }
 }
 
