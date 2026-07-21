@@ -2,6 +2,8 @@
 
 並走する Claude Code Agent を「艦隊」として率いる、カンバンボード × Terminal の macOS アプリ。複数の Claude Code セッションを同時に走らせる際の「どのセッションが何をやっているか」を、カンバン上のカード＋Agent状態で一望するためのツール。
 
+🌐 **[fuwasegu.github.io/fleet](https://fuwasegu.github.io/fleet/)** · 📦 **[Download (Releases)](https://github.com/fuwasegu/fleet/releases/latest)**
+
 - 全体仕様: [`SPECIFICATION.md`](SPECIFICATION.md)
 - 形式検証モデル (UI/ライフサイクル): [`kanban_ui.fsl`](kanban_ui.fsl)
 - 設計ドキュメント: [`docs/superpowers/specs/`](docs/superpowers/specs/)
