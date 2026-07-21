@@ -63,4 +63,17 @@ xcodebuild build -project Fleet.xcodeproj -scheme Fleet -destination 'platform=m
 xcodebuild test  -project Fleet.xcodeproj -scheme Fleet -destination 'platform=macOS'
 ```
 
+## リリース
+
+`v*` タグを push すると GitHub Actions（`.github/workflows/release.yml`）が Release ビルド →
+`Fleet.app.zip` 生成 → GitHub Release 作成まで自動実行する。
+
+```sh
+# project.yml の MARKETING_VERSION も合わせて更新してから
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+- 手動でビルドだけ検証したい場合は Actions から `Release` を **workflow_dispatch** 実行（Release は作らず zip を artifact 出力）。
+- リポジトリ secret に `TAP_GITHUB_TOKEN`（`fuwasegu/homebrew-tap` へ push 可能な PAT）を登録すると、Homebrew cask の version / sha256 も自動更新される。
+
 要件: macOS 26+, Xcode 26+, Swift 6。開発ツールとして **非サンドボックス**で動かす想定（後続スライスのプロセス列挙のため）。
