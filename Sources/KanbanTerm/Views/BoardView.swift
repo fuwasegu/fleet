@@ -212,7 +212,8 @@ struct BoardView: View {
         guard let cwd = BoardStore(context: context).card(withID: cardID)?.workingDirPath else { return }
         Task {
             let info = await Task.detached { () -> (String?, String?) in
-                (GitHubService.branch(cwd: cwd), GitHubService.prURL(cwd: cwd))
+                let branch = GitHubService.branch(cwd: cwd)
+                return (branch, GitHubService.prURL(cwd: cwd, branch: branch))
             }.value
             if let card = BoardStore(context: context).card(withID: cardID) {
                 try? BoardStore(context: context).setCardGitInfo(card, branch: info.0, prURL: info.1)

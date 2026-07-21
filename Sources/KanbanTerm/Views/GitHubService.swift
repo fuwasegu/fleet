@@ -22,14 +22,18 @@ enum GitHubService {
         return text
     }
 
-    static func prURL(cwd: String) -> String? {
+    /// 指定ブランチに紐づく PR の URL。
+    /// worktree では `gh pr view`(引数なし)の暗黙のブランチ検出がずれて別 PR を拾うことがあるため、
+    /// ブランチ名を明示的に渡して決定的にする。branch 不明時は暗黙検出にフォールバック。
+    static func prURL(cwd: String, branch: String? = nil) -> String? {
         let expanded = (cwd as NSString).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: expanded) else { return nil }
 
+        let target = branch.map { " " + shellQuote($0) } ?? ""
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // ログインシェル経由で PATH を通す(homebrew の gh 等)。現在ブランチの PR URL を1行出力。
-        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && gh pr view --json url -q .url 2>/dev/null"]
+        // ログインシェル経由で PATH を通す(homebrew の gh 等)。指定ブランチの PR URL を1行出力。
+        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && gh pr view\(target) --json url -q .url 2>/dev/null"]
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
