@@ -22,22 +22,23 @@ struct AgentStatusStyle {
     let status: String    // タグ右の補助語(承認待ち / 未読 など)
     let color: Color      // グリフ+タグの色
     let spin: Bool        // WORKING グリフを回す
+    let ping: Bool        // レーダーのブリップ(リングが広がる) = 稼働/承認待ち
     let showQuestion: Bool // Blocked のみ、実際の問い + 点滅キャレット行
 
     init(card: Card) {
         if card.isDone {
-            glyph = "✓"; tag = "DONE"; status = String(localized: "未読"); color = PromptTheme.ok; spin = false; showQuestion = false
+            glyph = "✓"; tag = "DONE"; status = String(localized: "未読"); color = PromptTheme.ok; spin = false; ping = false; showQuestion = false
             return
         }
         switch card.agentState {
         case .working:
-            glyph = "◐"; tag = "WORKING"; status = "";        color = PromptTheme.ok;      spin = true;  showQuestion = false
+            glyph = "◐"; tag = "WORKING"; status = "";        color = PromptTheme.ok;      spin = true;  ping = true;  showQuestion = false
         case .blocked:
-            glyph = "●"; tag = "BLOCKED"; status = String(localized: "承認待ち"); color = PromptTheme.blocked; spin = false; showQuestion = true
+            glyph = "●"; tag = "BLOCKED"; status = String(localized: "承認待ち"); color = PromptTheme.blocked; spin = false; ping = true;  showQuestion = true
         case .idle:
-            glyph = "○"; tag = "IDLE";    status = "";        color = PromptTheme.muted;   spin = false; showQuestion = false
+            glyph = "○"; tag = "IDLE";    status = "";        color = PromptTheme.muted;   spin = false; ping = false; showQuestion = false
         case .unknown:
-            glyph = "○"; tag = "READY";   status = "";        color = PromptTheme.muted;   spin = false; showQuestion = false
+            glyph = "○"; tag = "READY";   status = "";        color = PromptTheme.muted;   spin = false; ping = false; showQuestion = false
         }
     }
 }
@@ -59,7 +60,7 @@ struct CardFace: View {
         VStack(alignment: .leading, spacing: 8) {
             // 状態行
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                StatusGlyph(glyph: style.glyph, color: style.color, spin: style.spin)
+                StatusGlyph(glyph: style.glyph, color: style.color, spin: style.spin, ping: style.ping)
                 Text("[\(style.tag)]").foregroundStyle(style.color)
                 if !style.status.isEmpty {
                     Text(style.status).foregroundStyle(PromptTheme.muted)
@@ -184,16 +185,33 @@ struct StatusGlyph: View {
     let glyph: String
     let color: Color
     let spin: Bool
+    var ping: Bool = false
     @State private var angle = 0.0
+    @State private var pinging = false
 
     var body: some View {
         Text(glyph)
             .foregroundStyle(color)
             .rotationEffect(.degrees(spin ? angle : 0))
+            .background {
+                // レーダーのブリップ: リングが広がって消える
+                if ping {
+                    Circle()
+                        .stroke(color, lineWidth: 1.5)
+                        .frame(width: 16, height: 16)
+                        .scaleEffect(pinging ? 2.4 : 0.5)
+                        .opacity(pinging ? 0 : 0.8)
+                }
+            }
             .onAppear {
                 if spin {
                     withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
                         angle = 360
+                    }
+                }
+                if ping {
+                    withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
+                        pinging = true
                     }
                 }
             }
