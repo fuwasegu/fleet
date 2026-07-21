@@ -43,7 +43,7 @@ struct BoardView: View {
         .overlay(alignment: .topLeading) { tooltipOverlay }
         .overlay { terminalOverlay }
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
-        .navigationTitle("KANBAN Term")
+        .navigationTitle("Fleet")
         .toolbar {
             ToolbarItem {
                 Button {

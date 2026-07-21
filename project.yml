@@ -1,4 +1,4 @@
-name: KanbanTerm
+name: Fleet
 options:
   bundleIdPrefix: dev.hirosugu
   deploymentTarget:
@@ -25,7 +25,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKit
         GENERATE_INFOPLIST_FILE: "YES"
         DEFINES_MODULE: "YES"
-  KanbanTerm:
+  Fleet:
     type: application
     platform: macOS
     sources:
@@ -38,8 +38,10 @@ targets:
       - package: SwiftTerm
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanTerm
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.Fleet
+        PRODUCT_NAME: Fleet
         GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: Fleet
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
   KanbanKitTests:
@@ -54,10 +56,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKitTests
         GENERATE_INFOPLIST_FILE: "YES"
 schemes:
-  KanbanTerm:
+  Fleet:
     build:
       targets:
-        KanbanTerm: all
+        Fleet: all
         KanbanKitTests: [test]
     run:
       # 会社管理PCで出る "Developer Tools Access" 認証を回避するため、

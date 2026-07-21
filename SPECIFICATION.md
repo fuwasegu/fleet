@@ -1,4 +1,4 @@
-# KANBAN Term 仕様
+# Fleet 仕様
 
 カンバンボード x Terminal の Swift アプリ．
 
