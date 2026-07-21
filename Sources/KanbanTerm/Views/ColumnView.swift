@@ -49,7 +49,7 @@ struct ColumnView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
             RoundedRectangle(cornerRadius: 14)
-                .fill(Color(hex: "121519")!.opacity(0.82))         // 暗いパネル(レーダーが薄く透ける)
+                .fill(Color(hex: "121519")!)                       // 暗いパネル
                 .overlay(RoundedRectangle(cornerRadius: 14).fill(accent.opacity(0.05)))  // 極薄アクセント
         }
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(accent.opacity(0.22), lineWidth: 1))
