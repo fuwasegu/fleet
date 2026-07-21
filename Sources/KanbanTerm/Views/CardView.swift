@@ -51,6 +51,7 @@ struct CardFace: View {
     var onEdit: () -> Void = {}
     var onDelete: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
+    var onChannelTap: () -> Void = {}
     /// プロンプト行のホバー。active は "board" 座標のカーソル位置、nil で解除。
     var onPromptHover: (CGPoint?) -> Void = { _ in }
 
@@ -91,6 +92,24 @@ struct CardFace: View {
 
             // プロンプト行: cwd on branch ▸   (右端に PR 番号)
             promptLine
+
+            // A2A: 所属チャンネル(共有メモリ)のバッジ。タップで共有メモリを開く。
+            if let ch = card.channel {
+                let color = Color(hex: ch.colorHex ?? "") ?? PromptTheme.ok
+                Button(action: onChannelTap) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "link")
+                        Text(ch.name).lineLimit(1).truncationMode(.tail)
+                    }
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(color.opacity(0.16), in: Capsule())
+                    .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("共有メモリを開く")
+            }
 
             // Blocked: Agent の実際の問い + 点滅キャレット(カード内で動くのはここだけ)
             if style.showQuestion {
@@ -357,12 +376,14 @@ struct CardView: View {
     @Bindable var card: Card
 
     @GestureState private var isDragging = false
+    @GestureState private var isConnecting = false
 
     @State private var renaming = false
     @State private var draft = ""
     @State private var confirmingDelete = false
     @State private var changingDir = false
     @State private var pickingSession = false
+    @State private var showingMemory = false
 
     var body: some View {
         CardFace(
@@ -371,6 +392,7 @@ struct CardView: View {
             onEdit: beginRename,
             onDelete: { confirmingDelete = true },
             onOpenTerminal: { uiState.terminalCardID = card.id },
+            onChannelTap: { showingMemory = true },
             onPromptHover: { location in
                 if let location {
                     uiState.tooltipCardID = card.id
@@ -388,9 +410,19 @@ struct CardView: View {
                 uiState.cardFrames[card.id] = rect
             }
             .gesture(dragGesture)
+            .overlay(alignment: .trailing) { connectionHandle }
             .contextMenu {
                 Button { uiState.terminalCardID = card.id } label: {
                     Label("ターミナルを開く", systemImage: "terminal")
+                }
+                if card.channel != nil {
+                    Button { showingMemory = true } label: {
+                        Label("共有メモリを見る", systemImage: "tray.full")
+                    }
+                    Button(role: .destructive) { try? BoardStore(context: context).disconnectCard(card) } label: {
+                        Label("文脈共有を解除", systemImage: "link.badge.minus")
+                    }
+                    Divider()
                 }
                 Button(action: beginRename) {
                     Label("名前を変更", systemImage: "pencil")
@@ -417,6 +449,9 @@ struct CardView: View {
                     resumeSession(sessionID)
                 }
             }
+            .sheet(isPresented: $showingMemory) {
+                if let ch = card.channel { ChannelMemorySheet(channelID: ch.id, channelName: ch.name) }
+            }
             .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
                 Button("削除", role: .destructive, action: deleteCard)
                 Button("キャンセル", role: .cancel) {}
@@ -441,6 +476,37 @@ struct CardView: View {
                 commitCardDrop(cardID: card.id, at: value.location, context: context, uiState: uiState)
                 uiState.draggingCardID = nil
                 uiState.dragLocation = nil
+            }
+    }
+
+    /// カード右端の接続ポート。別カードへドラッグして文脈チャンネルを共有する。
+    private var connectionHandle: some View {
+        let color = card.channel.flatMap { Color(hex: $0.colorHex ?? "") } ?? PromptTheme.ok
+        return Circle()
+            .fill(color)
+            .frame(width: 15, height: 15)
+            .overlay(Image(systemName: "link").font(.system(size: 8, weight: .bold)).foregroundStyle(.black.opacity(0.7)))
+            .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
+            .opacity(isConnecting ? 0.4 : 0.85)
+            .offset(x: 8)
+            .help("ドラッグで別カードと文脈を共有")
+            .gesture(connectGesture)
+    }
+
+    private var connectGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("board"))
+            .updating($isConnecting) { _, state, _ in state = true }
+            .onChanged { value in
+                uiState.connectingFromCardID = card.id
+                uiState.connectDragLocation = value.location
+            }
+            .onEnded { value in
+                if let targetID = uiState.cardFrames.first(where: { $0.key != card.id && $0.value.contains(value.location) })?.key,
+                   let target = BoardStore(context: context).card(withID: targetID) {
+                    try? BoardStore(context: context).connectCards(card, target)
+                }
+                uiState.connectingFromCardID = nil
+                uiState.connectDragLocation = nil
             }
     }
 

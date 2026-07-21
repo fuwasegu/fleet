@@ -18,6 +18,8 @@ final class BoardUIState {
     var draggingColumnID: UUID?                // 並べ替え中の列
     var columnDragLocation: CGPoint?           // "board" 座標系でのカーソル位置(列ドラッグ)
     var resumeRequests: [UUID: String] = [:]   // カード → 起動時に復帰する claude セッションID
+    var connectingFromCardID: UUID?            // 文脈共有の接続ドラッグ元カード
+    var connectDragLocation: CGPoint?          // "board" 座標系でのカーソル位置(接続ドラッグ)
 }
 
 extension Color {
