@@ -1,6 +1,6 @@
 name: Fleet
 options:
-  bundleIdPrefix: dev.hirosugu
+  bundleIdPrefix: dev.fuwasegu
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
@@ -22,7 +22,7 @@ targets:
       - Sources/KanbanKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKit
+        PRODUCT_BUNDLE_IDENTIFIER: dev.fuwasegu.KanbanKit
         GENERATE_INFOPLIST_FILE: "YES"
         DEFINES_MODULE: "YES"
   Fleet:
@@ -39,7 +39,7 @@ targets:
       - package: SwiftTerm
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.Fleet
+        PRODUCT_BUNDLE_IDENTIFIER: dev.fuwasegu.Fleet
         PRODUCT_NAME: Fleet
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -57,7 +57,7 @@ targets:
       - target: KanbanKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.KanbanKitTests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.fuwasegu.KanbanKitTests
         GENERATE_INFOPLIST_FILE: "YES"
 schemes:
   Fleet:
