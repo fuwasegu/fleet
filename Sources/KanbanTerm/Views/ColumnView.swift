@@ -17,7 +17,8 @@ struct ColumnView: View {
         VStack(alignment: .leading, spacing: 8) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(accent)
-                .frame(height: 4)
+                .frame(height: 3)
+                .shadow(color: accent.opacity(0.7), radius: 5)   // ネオン風グロー
             header
             ScrollView {
                 LazyVStack(spacing: 8) {
@@ -46,8 +47,12 @@ struct ColumnView: View {
         .padding(10)
         .frame(width: 280)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(0.25)))
+        .background {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(hex: "121519")!)                       // 暗いパネル
+                .overlay(RoundedRectangle(cornerRadius: 14).fill(accent.opacity(0.05)))  // 極薄アクセント
+        }
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(accent.opacity(0.22), lineWidth: 1))
         .onGeometryChange(for: CGRect.self) {
             $0.frame(in: .named("board"))
         } action: { rect in

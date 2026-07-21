@@ -24,6 +24,7 @@ struct KanbanTermApp: App {
                 BoardView()
             }
             .frame(minWidth: 820, minHeight: 520)
+            .preferredColorScheme(.dark)   // サイバー基調に統一(常時ダーク)
         }
         .modelContainer(container)
     }

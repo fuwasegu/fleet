@@ -37,6 +37,7 @@ struct BoardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(hex: "0B0D0F")!)   // サイバーなニアブラックの盤面
         .coordinateSpace(.named("board"))
         .overlay(alignment: .topLeading) { draggedOverlay }
         .overlay(alignment: .topLeading) { tooltipOverlay }
