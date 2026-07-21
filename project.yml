@@ -41,6 +41,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.Fleet
         PRODUCT_NAME: Fleet
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: "YES"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Fleet
