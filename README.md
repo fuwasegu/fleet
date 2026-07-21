@@ -6,6 +6,17 @@
 - 形式検証モデル (UI/ライフサイクル): [`kanban_ui.fsl`](kanban_ui.fsl)
 - 設計ドキュメント: [`docs/superpowers/specs/`](docs/superpowers/specs/)
 
+## インストール
+
+[**Releases**](../../releases/latest) から `Fleet.app.zip` をダウンロードし、展開して `Fleet.app` を `/Applications` に置いてください。要件: **macOS 26+**。
+
+> ⚠️ **未署名 / 未 notarize ビルドです。** 初回起動は Gatekeeper に弾かれます。次のどちらかで開いてください:
+> - `Fleet.app` を **右クリック → 開く**（→「開く」を選択）
+> - もしくはターミナルで検疫属性を除去:
+>   ```sh
+>   xattr -dr com.apple.quarantine /Applications/Fleet.app
+>   ```
+
 ## 現在の実装状況
 
 **実装済み（スライス1〜4）**
