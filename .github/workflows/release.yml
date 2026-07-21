@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # 手動実行(リリースは作らずビルド検証のみ)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$latest" ] && sudo xcode-select -s "$latest"
+          sw_vers
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build (Release, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project Fleet.xcodeproj -scheme Fleet -configuration Release \
+            -derivedDataPath build/dd \
+            MARKETING_VERSION=${{ steps.ver.outputs.version }} \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package (zip, no xattr)
+        run: |
+          APP="build/dd/Build/Products/Release/Fleet.app"
+          ditto -c -k --keepParent --noextattr "$APP" Fleet.app.zip
+          shasum -a 256 Fleet.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fleet.app.zip
+          path: Fleet.app.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## インストール
+
+          ```sh
+          brew install --cask fuwasegu/tap/fleet
+          ```
+
+          または `Fleet.app.zip` を展開して `/Applications` へ。要件: **macOS 26+**。
+
+          > 未署名ビルドです。手動導入時の初回起動は **右クリック → 開く**、または `xattr -dr com.apple.quarantine /Applications/Fleet.app`。Homebrew 版は自動で検疫属性を除去します。
+          NOTES
+          gh release create "$GITHUB_REF_NAME" Fleet.app.zip \
+            --title "Fleet $GITHUB_REF_NAME" --notes-file notes.md
+
+  update-cask:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    steps:
+      - name: Guard (TAP_GITHUB_TOKEN が必要)
+        id: guard
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN 未設定 → cask 自動更新をスキップ（手動で更新してください）"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.guard.outputs.skip == 'false'
+        with:
+          name: Fleet.app.zip
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.skip == 'false'
+        with:
+          repository: fuwasegu/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Bump cask (version + sha256)
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          sha=$(shasum -a 256 Fleet.app.zip | awk '{print $1}')
+          f=tap/Casks/fleet.rb
+          sed -i -E "s/version \"[^\"]+\"/version \"$v\"/" "$f"
+          sed -i -E "s/sha256 \"[0-9a-f]+\"/sha256 \"$sha\"/" "$f"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/fleet.rb
+          git commit -m "fleet $v"
+          git push
