@@ -32,6 +32,7 @@ targets:
       - Sources/KanbanTerm
       - path: Resources/markdown
         buildPhase: resources
+      - Resources/Assets.xcassets
     dependencies:
       - target: KanbanKit
         embed: true
@@ -41,6 +42,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hirosugu.Fleet
         PRODUCT_NAME: Fleet
         GENERATE_INFOPLIST_FILE: "YES"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Fleet
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
