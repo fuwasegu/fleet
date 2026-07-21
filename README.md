@@ -10,14 +10,18 @@
 
 ## インストール
 
-[**Releases**](../../releases/latest) から `Fleet.app.zip` をダウンロードし、展開して `Fleet.app` を `/Applications` に置いてください。要件: **macOS 26+**。
+要件: **macOS 26+**。
 
-> ⚠️ **未署名 / 未 notarize ビルドです。** 初回起動は Gatekeeper に弾かれます。次のどちらかで開いてください:
-> - `Fleet.app` を **右クリック → 開く**（→「開く」を選択）
-> - もしくはターミナルで検疫属性を除去:
->   ```sh
->   xattr -dr com.apple.quarantine /Applications/Fleet.app
->   ```
+**Homebrew（推奨）** — Gatekeeper の手動回避も不要:
+
+```sh
+brew install --cask fuwasegu/tap/fleet
+```
+
+**手動** — [Releases](../../releases/latest) から `Fleet.app.zip` を DL・展開し `Fleet.app` を `/Applications` へ。
+
+> ⚠️ 手動導入は **未署名 / 未 notarize** のため初回起動が Gatekeeper に弾かれます。**右クリック → 開く**、または `xattr -dr com.apple.quarantine /Applications/Fleet.app`。
+> （Homebrew 版は cask が自動で検疫属性を除去します）
 
 ## 現在の実装状況
 

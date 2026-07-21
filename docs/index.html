@@ -168,11 +168,18 @@
       <div class="eyebrow">Install</div>
       <h2>導入</h2>
     </div>
-    <div class="warn">⚠️ 未署名・未 notarize ビルドのため、初回起動は Gatekeeper に弾かれます。下記いずれかで開いてください。</div>
+    <p style="text-align:center;color:var(--muted);margin:-10px auto 26px;max-width:52ch">要件: <b style="color:var(--text)">macOS 26+</b></p>
+
+    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--green)">HOMEBREW（推奨）</h3>
+    <pre style="max-width:640px;margin:8px auto 8px">brew install --cask fuwasegu/tap/fleet</pre>
+    <p style="text-align:center;color:var(--dim);font-size:13px;margin:0 auto 30px">cask が検疫属性を自動除去するので、そのまま起動できます。</p>
+
+    <h3 style="text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--muted)">手動</h3>
+    <div class="warn">⚠️ 手動導入は未署名・未 notarize のため、初回起動は Gatekeeper に弾かれます。<b>右クリック → 開く</b>、または下記で検疫属性を除去してください。</div>
     <ol>
       <li><a href="https://github.com/fuwasegu/fleet/releases/latest">Releases</a> から <code>Fleet.app.zip</code> をダウンロードし展開</li>
       <li><code>Fleet.app</code> を <code>/Applications</code> へ移動</li>
-      <li>初回のみ <b>右クリック → 開く</b>、または検疫属性を除去:
+      <li>初回のみ <b>右クリック → 開く</b>、または:
         <pre>xattr -dr com.apple.quarantine /Applications/Fleet.app</pre>
       </li>
     </ol>
