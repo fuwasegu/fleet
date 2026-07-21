@@ -8,6 +8,7 @@ struct ColumnView: View {
     @Bindable var column: BoardColumn
 
     @State private var addingCard = false
+    @GestureState private var isDraggingColumn = false
 
     private var store: BoardStore { BoardStore(context: context) }
     private var sortedCards: [Card] { column.cards.sorted { $0.order < $1.order } }
@@ -53,6 +54,7 @@ struct ColumnView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).fill(accent.opacity(0.05)))  // 極薄アクセント
         }
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(accent.opacity(0.22), lineWidth: 1))
+        .opacity(isDraggingColumn ? 0.25 : 1)   // ドラッグ中の元列を薄く
         .onGeometryChange(for: CGRect.self) {
             $0.frame(in: .named("board"))
         } action: { rect in
@@ -60,8 +62,32 @@ struct ColumnView: View {
         }
     }
 
+    /// 列ヘッダのグリップ。掴んで左右にドラッグして列を並べ替える。
+    private var dragHandle: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+            .help("ドラッグで列を並べ替え")
+            .gesture(
+                DragGesture(minimumDistance: 6, coordinateSpace: .named("board"))
+                    .updating($isDraggingColumn) { _, state, _ in state = true }
+                    .onChanged { value in
+                        uiState.draggingColumnID = column.id
+                        uiState.columnDragLocation = value.location
+                    }
+                    .onEnded { value in
+                        commitColumnDrop(columnID: column.id, at: value.location,
+                                         context: context, uiState: uiState)
+                        uiState.draggingColumnID = nil
+                        uiState.columnDragLocation = nil
+                    }
+            )
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
+            dragHandle
             TextField("列名", text: $column.name)
                 .textFieldStyle(.plain)
                 .font(.headline)

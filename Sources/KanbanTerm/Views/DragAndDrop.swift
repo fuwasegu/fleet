@@ -15,6 +15,8 @@ final class BoardUIState {
     var previewURL: URL?                        // Markdownプレビュー中のファイル(fsl: preview_open、terminal の上層)
     var tooltipCardID: UUID?                   // プロンプト行ホバー中のカード(tooltip 表示対象)
     var tooltipAnchor: CGPoint?                // "board" 座標系でのカーソル位置(tooltip の基準点)
+    var draggingColumnID: UUID?                // 並べ替え中の列
+    var columnDragLocation: CGPoint?           // "board" 座標系でのカーソル位置(列ドラッグ)
 }
 
 extension Color {
@@ -69,5 +71,23 @@ func commitCardDrop(cardID: UUID, at location: CGPoint, context: ModelContext, u
     }
     withAnimation(.snappy(duration: 0.2)) {
         try? store.moveCard(dragged, to: column, at: index)
+    }
+}
+
+/// 列ドロップ確定: カーソル x から挿入位置を割り出して列を並べ替える。
+@MainActor
+func commitColumnDrop(columnID: UUID, at location: CGPoint, context: ModelContext, uiState: BoardUIState) {
+    let store = BoardStore(context: context)
+    guard let dragged = store.column(withID: columnID) else { return }
+    let others = ((try? store.columns()) ?? []).filter { $0.id != columnID }
+    var index = others.count
+    for (i, c) in others.enumerated() {
+        if let f = uiState.columnFrames[c.id], location.x < f.midX {
+            index = i
+            break
+        }
+    }
+    withAnimation(.snappy(duration: 0.2)) {
+        try? store.moveColumn(dragged, to: index)
     }
 }

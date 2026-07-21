@@ -49,6 +49,7 @@ struct CardFace: View {
     let card: Card
     var showActions: Bool = false
     var onEdit: () -> Void = {}
+    var onDelete: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
     /// プロンプト行のホバー。active は "board" 座標のカーソル位置、nil で解除。
     var onPromptHover: (CGPoint?) -> Void = { _ in }
@@ -72,6 +73,11 @@ struct CardFace: View {
                         .font(.system(size: 11))
                         .foregroundStyle(PromptTheme.muted)
                         .help("カード名を編集")
+                    Button(action: onDelete) { Image(systemName: "trash") }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(PromptTheme.muted)
+                        .help("カードを削除")
                 }
             }
             .font(PromptTheme.mono.weight(.semibold))
@@ -360,6 +366,7 @@ struct CardView: View {
             card: card,
             showActions: true,
             onEdit: beginRename,
+            onDelete: { confirmingDelete = true },
             onOpenTerminal: { uiState.terminalCardID = card.id },
             onPromptHover: { location in
                 if let location {

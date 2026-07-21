@@ -62,6 +62,23 @@ struct BoardStoreTests {
         #expect(cols.last?.id == c.id)
     }
 
+    @Test func moveColumnReorders() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let b = try store.addColumn(name: "B")
+        let c = try store.addColumn(name: "C")
+        // A(0) B(1) C(2) → C を先頭へ
+        try store.moveColumn(c, to: 0)
+        var names = try store.columns().map(\.name)
+        #expect(names == ["C", "A", "B"])
+        #expect(try store.columns().map(\.order) == [0, 1, 2])
+        // A を末尾へ
+        try store.moveColumn(a, to: 2)
+        names = try store.columns().map(\.name)
+        #expect(names == ["C", "B", "A"])
+        _ = b
+    }
+
     @Test func setColumnColorPersists() throws {
         let store = try makeStore()
         let a = try store.addColumn(name: "A")

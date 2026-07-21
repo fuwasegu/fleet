@@ -40,6 +40,7 @@ struct BoardView: View {
         .background(Color(hex: "0B0D0F")!)   // サイバーなニアブラックの盤面
         .coordinateSpace(.named("board"))
         .overlay(alignment: .topLeading) { draggedOverlay }
+        .overlay(alignment: .topLeading) { columnDraggedOverlay }
         .overlay(alignment: .topLeading) { tooltipOverlay }
         .overlay { terminalOverlay }
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
@@ -234,6 +235,26 @@ struct BoardView: View {
                 PromptTooltip(card: card)
                     .offset(x: x, y: y)
             }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// 並べ替え中の列を示す、カーソル追従のチップ。
+    @ViewBuilder private var columnDraggedOverlay: some View {
+        if let id = uiState.draggingColumnID,
+           let loc = uiState.columnDragLocation,
+           let column = BoardStore(context: context).column(withID: id) {
+            let accent = column.colorHex.flatMap(Color.init(hex:)) ?? .gray
+            HStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: 2).fill(accent).frame(width: 18, height: 3)
+                Text(column.name).font(.headline).lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Color(hex: "121519")!, in: Capsule())
+            .overlay(Capsule().stroke(accent.opacity(0.5), lineWidth: 1))
+            .shadow(radius: 12, y: 5)
+            .position(loc)
             .allowsHitTesting(false)
         }
     }

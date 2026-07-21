@@ -55,6 +55,15 @@ public struct BoardStore {
         try context.save()
     }
 
+    /// 列の並べ替え。order を 0..n-1 に振り直す。
+    public func moveColumn(_ column: BoardColumn, to index: Int) throws {
+        var target = try columns().filter { $0.id != column.id }
+        let clamped = max(0, min(index, target.count))
+        target.insert(column, at: clamped)
+        for (i, c) in target.enumerated() { c.order = i }
+        try context.save()
+    }
+
     // MARK: - カード
 
     @discardableResult
