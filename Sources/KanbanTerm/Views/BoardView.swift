@@ -126,8 +126,9 @@ struct BoardView: View {
                     TerminalView(
                         cardID: id,
                         directory: card.workingDirPath,
-                        startAgent: card.autoStartAgent,
+                        startAgent: card.autoStartAgent || uiState.resumeRequests[id] != nil,
                         dangerSkip: card.dangerSkip,
+                        resumeSessionID: uiState.resumeRequests[id],
                         sessions: sessions,
                         context: context,
                         uiState: uiState

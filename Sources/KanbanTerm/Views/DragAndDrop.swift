@@ -17,6 +17,7 @@ final class BoardUIState {
     var tooltipAnchor: CGPoint?                // "board" 座標系でのカーソル位置(tooltip の基準点)
     var draggingColumnID: UUID?                // 並べ替え中の列
     var columnDragLocation: CGPoint?           // "board" 座標系でのカーソル位置(列ドラッグ)
+    var resumeRequests: [UUID: String] = [:]   // カード → 起動時に復帰する claude セッションID
 }
 
 extension Color {

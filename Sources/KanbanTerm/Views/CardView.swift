@@ -360,6 +360,7 @@ struct CardView: View {
     @State private var draft = ""
     @State private var confirmingDelete = false
     @State private var changingDir = false
+    @State private var pickingSession = false
 
     var body: some View {
         CardFace(
@@ -395,6 +396,10 @@ struct CardView: View {
                 Button { changingDir = true } label: {
                     Label("作業ディレクトリを変更…", systemImage: "folder")
                 }
+                Button { pickingSession = true } label: {
+                    Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(card.workingDirPath == nil)
                 Divider()
                 Button(role: .destructive) { confirmingDelete = true } label: {
                     Label("カードを削除", systemImage: "trash")
@@ -403,6 +408,11 @@ struct CardView: View {
             .sheet(isPresented: $renaming) {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
+                }
+            }
+            .sheet(isPresented: $pickingSession) {
+                SessionPickerSheet(cwd: card.workingDirPath) { sessionID in
+                    resumeSession(sessionID)
                 }
             }
             .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
@@ -441,6 +451,14 @@ struct CardView: View {
         if uiState.terminalCardID == card.id { uiState.terminalCardID = nil }
         sessions.close(card.id)
         do { try BoardStore(context: context).deleteCard(card) } catch {}
+    }
+
+    /// 選択した過去セッションを、このカードの端末で `claude --resume <id>` 起動する。
+    /// 既存セッションは終了して新規に開き直す。
+    private func resumeSession(_ sessionID: String) {
+        sessions.close(card.id)
+        uiState.resumeRequests[card.id] = sessionID
+        uiState.terminalCardID = card.id
     }
 }
 

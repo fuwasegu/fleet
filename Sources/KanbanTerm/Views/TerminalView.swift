@@ -150,7 +150,7 @@ final class TerminalSessions {
               directory: String?,
               startAgent: Bool,
               dangerSkip: Bool,
-              resume: Bool = false,
+              resumeSessionID: String? = nil,
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
@@ -178,12 +178,15 @@ final class TerminalSessions {
             currentDirectory: Self.resolve(directory)
         )
         if startAgent {
-            let flags = (resume ? " --continue" : "") + (dangerSkip ? " --dangerously-skip-permissions" : "")
+            // 指定セッションの復帰 or 新規起動。危険スキップは任意で付与。
+            let resumeArg = resumeSessionID.map { " --resume \($0)" } ?? ""
+            let flags = resumeArg + (dangerSkip ? " --dangerously-skip-permissions" : "")
             let bytes = ArraySlice(Array("claude\(flags)\n".utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
             term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
         }
         views[cardID] = term
+        uiState.resumeRequests[cardID] = nil   // 復帰要求は一度きり(再オープンで再復帰しない)
         return term
     }
 
@@ -253,6 +256,7 @@ struct TerminalView: NSViewRepresentable {
     let directory: String?
     let startAgent: Bool
     let dangerSkip: Bool
+    var resumeSessionID: String? = nil
     let sessions: TerminalSessions
     let context: ModelContext
     let uiState: BoardUIState
@@ -261,6 +265,7 @@ struct TerminalView: NSViewRepresentable {
         sessions.view(
             for: cardID, directory: directory,
             startAgent: startAgent, dangerSkip: dangerSkip,
+            resumeSessionID: resumeSessionID,
             context: self.context, uiState: uiState
         )
     }
