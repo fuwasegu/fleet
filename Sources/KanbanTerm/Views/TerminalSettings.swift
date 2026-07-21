@@ -75,11 +75,25 @@ struct TerminalSettingsPopover: View {
     @AppStorage(TerminalSettings.fontNameKey) private var fontName = TerminalSettings.systemSentinel
     @AppStorage(TerminalSettings.fontSizeKey) private var fontSize = TerminalSettings.defaultSize
     @AppStorage(TerminalSettings.themeKey) private var themeID = TermTheme.default.id
+    @AppStorage("appLanguage") private var appLanguage = "system"
 
     private let families = TerminalSettings.monospacedFamilies()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("言語").font(.caption).foregroundStyle(.secondary)
+                Picker("言語", selection: $appLanguage) {
+                    Text("システム").tag("system")
+                    Text("English").tag("en")
+                    Text("日本語").tag("ja")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Divider()
+
             Text("ターミナル").font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
