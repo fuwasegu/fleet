@@ -28,6 +28,8 @@ enum ClaudeSessionsService {
         for file in files where file.hasSuffix(".jsonl") {
             let path = (dir as NSString).appendingPathComponent(file)
             let sid = (file as NSString).deletingPathExtension
+            // session id は UUID 相当のみ採用(細工ファイル名を端末コマンドに混ぜない)
+            guard sid.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else { continue }
             let modified = (try? fm.attributesOfItem(atPath: path)[.modificationDate]) as? Date ?? .distantPast
             out.append(ClaudeSession(id: sid, title: firstPrompt(path) ?? "(プロンプトなし)", modified: modified))
         }

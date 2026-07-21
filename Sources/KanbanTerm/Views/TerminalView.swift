@@ -178,10 +178,16 @@ final class TerminalSessions {
             currentDirectory: Self.resolve(directory)
         )
         if startAgent {
-            // 指定セッションの復帰 or 新規起動。危険スキップは任意で付与。
-            let resumeArg = resumeSessionID.map { " --resume \($0)" } ?? ""
-            let flags = resumeArg + (dangerSkip ? " --dangerously-skip-permissions" : "")
-            let bytes = ArraySlice(Array("claude\(flags)\n".utf8))
+            // インタラクティブシェルへ「入力」として送るため、session id は必ず検証する。
+            // (id は ~/.claude/projects 配下のファイル名由来。細工されたファイル名による
+            //  コマンドインジェクションを防ぐため、UUID 相当の文字種のみ許可)
+            var cmd = "claude"
+            if let sid = resumeSessionID,
+               sid.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil {
+                cmd += " --resume \(sid)"
+            }
+            if dangerSkip { cmd += " --dangerously-skip-permissions" }
+            let bytes = ArraySlice(Array((cmd + "\n").utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
             term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
         }
