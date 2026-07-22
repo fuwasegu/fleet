@@ -242,19 +242,21 @@ public struct BoardStore {
 
     /// チャンネルの現在メンバーで peers.json と各カードの binding.json を同期する。
     /// A2A の「所属は可変・bridge は間接解決」を成立させる唯一の書き込み口。
-    func syncChannel(_ channel: Channel) {
-        let peers = channel.cards.map(Self.peerInfo(for:))
+    /// 状態変化時にも呼ばれ、fleet_peers を live-aware に保つ。
+    public func syncChannel(_ channel: Channel) {
+        let peers = channel.cards.map { Self.peerInfo(for: $0, channelID: channel.id) }
         ChannelStore.writePeers(peers, for: channel.id)
         for c in channel.cards {
             ChannelStore.writeBinding(cardID: c.id, channel: channel.id, name: c.title)
         }
     }
 
-    private static func peerInfo(for card: Card) -> PeerInfo {
+    private static func peerInfo(for card: Card, channelID: UUID) -> PeerInfo {
         let status = card.isDone ? "done" : card.agentState.rawValue
         return PeerInfo(id: card.id.uuidString,
                         name: card.title,
                         status: status,
+                        task: ChannelStore.readStatus(cardID: card.id, channelID: channelID),
                         blocked: card.blockedPrompt,
                         branch: card.branch,
                         pr: card.prURL)

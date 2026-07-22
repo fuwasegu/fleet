@@ -20,6 +20,7 @@ final class BoardUIState {
     var resumeRequests: [UUID: String] = [:]   // カード → 起動時に復帰する claude セッションID
     var connectingFromCardID: UUID?            // 文脈共有の接続ドラッグ元カード
     var connectDragLocation: CGPoint?          // "board" 座標系でのカーソル位置(接続ドラッグ)
+    var pendingMessageCardIDs: Set<UUID> = []  // 未配信の A2A メッセージが溜まっているカード(封筒バッジ)
 }
 
 extension Color {

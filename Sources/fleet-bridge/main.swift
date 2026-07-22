@@ -116,6 +116,43 @@ func readPeers(_ channelDir: URL) -> [[String: Any]] {
     return arr
 }
 
+/// 宛先の表示名から自分以外のカード id を解決する(見つからなければ nil)。
+func resolvePeerID(_ name: String, in channelDir: URL) -> String? {
+    let target = name.lowercased()
+    for p in readPeers(channelDir) where (p["id"] as? String) != cardID {
+        if ((p["name"] as? String) ?? "").lowercased() == target { return p["id"] as? String }
+    }
+    return nil
+}
+
+/// 有向メッセージを outbox.jsonl へ追記する(Fleet 本体の watcher が配信)。
+func appendOutbox(_ channelDir: URL, to: String, kind: String, text: String) {
+    let outboxURL = channelDir.appendingPathComponent("outbox.jsonl")
+    let iso = ISO8601DateFormatter().string(from: Date())
+    var entry: [String: Any] = [
+        "id": UUID().uuidString, "fromID": cardID, "from": authorName(),
+        "to": to, "kind": kind, "text": text, "createdAt": iso
+    ]
+    if let toID = resolvePeerID(to, in: channelDir) { entry["toID"] = toID }
+    guard let d = try? JSONSerialization.data(withJSONObject: entry),
+          let s = String(data: d, encoding: .utf8) else { return }
+    let line = Data((s + "\n").utf8)
+    withChannelLock(channelDir) {
+        let fd = outboxURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
+        guard fd >= 0 else { return }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try? h.write(contentsOf: line)
+        try? h.close()
+    }
+}
+
+/// 現在の作業を status-<cardID>.json に書き、fleet_peers に反映させる。
+func writeStatus(_ channelDir: URL, task: String) {
+    let url = channelDir.appendingPathComponent("status-\(cardID).json")
+    let obj: [String: Any] = ["task": task, "ts": ISO8601DateFormatter().string(from: Date())]
+    if let d = try? JSONSerialization.data(withJSONObject: obj) { try? d.write(to: url, options: .atomic) }
+}
+
 // MARK: - Tools
 
 let toolDefs: [[String: Any]] = [
@@ -143,6 +180,39 @@ let toolDefs: [[String: Any]] = [
         "name": "fleet_peers",
         "description": "List the other agents (cards) sharing this channel, with their live status (working / blocked / idle / done), current branch and PR, and — when blocked — the question they are stuck on. Use it to decide whether to wait for, or hand off to, a peer.",
         "inputSchema": ["type": "object", "properties": [:]]
+    ],
+    [
+        "name": "fleet_message",
+        "description": "Send a direct message to a specific peer agent. Unlike fleet_remember (a passive shared note), this is PUSHED into the recipient's session so they see it even mid-task — use it for events that affect them: 'I changed the schema, re-pull', 'the API is ready, you can start the client', a question you need answered.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "to": ["type": "string", "description": "The peer's name (as shown by fleet_peers)."],
+                "text": ["type": "string", "description": "The message (max 16 KB)."]
+            ],
+            "required": ["to", "text"]
+        ]
+    ],
+    [
+        "name": "fleet_handoff",
+        "description": "Hand off work to a peer agent: pushes a framed handoff message to them. Use when you have finished a part and another agent should take over. Include what you did and what remains.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "to": ["type": "string", "description": "The peer's name to hand off to."],
+                "text": ["type": "string", "description": "What you did and what they should do next (max 16 KB)."]
+            ],
+            "required": ["to", "text"]
+        ]
+    ],
+    [
+        "name": "fleet_status",
+        "description": "Publish a one-line description of what you are currently working on. Peers see it via fleet_peers. Update it when you switch tasks so others can coordinate.",
+        "inputSchema": [
+            "type": "object",
+            "properties": ["text": ["type": "string", "description": "Short current-activity line."]],
+            "required": ["text"]
+        ]
     ]
 ]
 
@@ -206,6 +276,31 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             return "- \(n) [\(status)]\(suffix)"
         }
         sendResult(id, textContent("Agents sharing this channel:\n" + lines.joined(separator: "\n")))
+
+    case "fleet_message", "fleet_handoff":
+        guard let to = (arguments["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty else {
+            sendResult(id, textContent("to (peer name) is required", isError: true)); return
+        }
+        guard let text = arguments["text"] as? String,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            sendResult(id, textContent("text is required", isError: true)); return
+        }
+        guard text.utf8.count <= maxRememberBytes else {
+            sendResult(id, textContent("Message too large (\(text.utf8.count) bytes; max \(maxRememberBytes)).", isError: true)); return
+        }
+        let kind = name == "fleet_handoff" ? "handoff" : "message"
+        appendOutbox(channelDir, to: to, kind: kind, text: text)
+        let known = resolvePeerID(to, in: channelDir) != nil
+        let note = known ? "" : " (note: no peer named \"\(to)\" is currently in this channel; it will be delivered if they join)"
+        sendResult(id, textContent("Sent to \(to). It will be pushed into their session when they are ready.\(note)"))
+
+    case "fleet_status":
+        guard let text = arguments["text"] as? String,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            sendResult(id, textContent("text is required", isError: true)); return
+        }
+        writeStatus(channelDir, task: String(text.prefix(200)))
+        sendResult(id, textContent("Status updated."))
 
     default:
         sendResult(id, textContent("Unknown tool: \(name)", isError: true))

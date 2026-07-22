@@ -48,6 +48,7 @@ struct AgentStatusStyle {
 struct CardFace: View {
     let card: Card
     var showActions: Bool = false
+    var hasPendingMessage: Bool = false   // A2A: 未配信メッセージが溜まっている(封筒バッジ)
     var onEdit: () -> Void = {}
     var onDelete: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
@@ -96,19 +97,30 @@ struct CardFace: View {
             // A2A: 所属チャンネル(共有メモリ)のバッジ。タップで共有メモリを開く。
             if let ch = card.channel {
                 let color = Color(hex: ch.colorHex ?? "") ?? PromptTheme.ok
-                Button(action: onChannelTap) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "link")
-                        Text(ch.name).lineLimit(1).truncationMode(.tail)
+                HStack(spacing: 6) {
+                    Button(action: onChannelTap) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "link")
+                            Text(ch.name).lineLimit(1).truncationMode(.tail)
+                        }
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(color.opacity(0.16), in: Capsule())
+                        .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 1))
                     }
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(color)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(color.opacity(0.16), in: Capsule())
-                    .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 1))
+                    .buttonStyle(.plain)
+                    .help("共有メモリを開く")
+
+                    if hasPendingMessage {
+                        // 宛先が作業中/未起動でまだ配信できていないメッセージがある
+                        Image(systemName: "envelope.badge.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(PromptTheme.blocked)
+                            .help("届いた A2A メッセージがあります(次に手が空いたら反映されます)")
+                            .transition(.opacity)
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("共有メモリを開く")
             }
 
             // Blocked: Agent の実際の問い + 点滅キャレット(カード内で動くのはここだけ)
@@ -390,6 +402,7 @@ struct CardView: View {
         CardFace(
             card: card,
             showActions: true,
+            hasPendingMessage: uiState.pendingMessageCardIDs.contains(card.id),
             onEdit: beginRename,
             onDelete: { confirmingDelete = true },
             onOpenTerminal: { uiState.terminalCardID = card.id },

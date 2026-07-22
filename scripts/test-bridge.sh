@@ -25,6 +25,9 @@ OUT="$(mktemp)"
   echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fleet_remember","arguments":{"text":"hello-ci"}}}'
   echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fleet_recall","arguments":{}}}'
   echo '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fleet_peers","arguments":{}}}'
+  echo '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"fleet_message","arguments":{"to":"cardB","text":"api is ready"}}}'
+  echo '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"fleet_handoff","arguments":{"to":"cardB","text":"take over the client"}}}'
+  echo '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"fleet_status","arguments":{"text":"building the API"}}}'
   echo "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"fleet_remember\",\"arguments\":{\"text\":\"$BIG\"}}}"
   echo 'this is not json'
   echo '{"jsonrpc":"2.0","id":6,"method":"nonsense/method"}'
@@ -47,8 +50,21 @@ grep -q 'Note too large'          "$OUT" || fail "oversized remember not rejecte
 grep -q '"code":-32700'           "$OUT" || fail "malformed JSON did not return parse error"
 grep -q '"code":-32601'           "$OUT" || fail "unknown method not rejected"
 
+grep -q 'Sent to cardB'          "$OUT" || fail "fleet_message not acknowledged"
+grep -q 'Status updated'         "$OUT" || fail "fleet_status not acknowledged"
+
 # 上限超えの巨大ノートが memory.jsonl に書かれていないこと(1行=hello-ci のみ)
 LINES="$(wc -l < "$ROOT/channels/$CHAN/memory.jsonl" | tr -d ' ')"
 [ "$LINES" = "1" ] || fail "oversized note should not be persisted (memory has $LINES lines)"
+
+# outbox に message + handoff の2行、宛先 toID が解決されていること
+OBX="$ROOT/channels/$CHAN/outbox.jsonl"
+[ -f "$OBX" ] || fail "outbox.jsonl not created"
+OLINES="$(wc -l < "$OBX" | tr -d ' ')"
+[ "$OLINES" = "2" ] || fail "outbox should have 2 messages (has $OLINES)"
+grep -q '"kind":"handoff"'       "$OBX" || fail "handoff not recorded in outbox"
+grep -q '33333333-3333-3333-3333-333333333333' "$OBX" || fail "outbox did not resolve toID for cardB"
+# status ファイルが書かれていること
+[ -f "$ROOT/channels/$CHAN/status-$CARD.json" ] || fail "status file not written"
 
 echo "fleet-bridge protocol test: OK"

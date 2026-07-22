@@ -10,6 +10,7 @@ struct BoardView: View {
     @Query private var allChannels: [Channel]
     @State private var uiState = BoardUIState()
     @State private var sessions = TerminalSessions()
+    @State private var hub = A2AChannelHub()
     @State private var caffeine = CaffeineController()
     @State private var showingCaffeine = false
     @State private var showingTokens = false
@@ -89,6 +90,13 @@ struct BoardView: View {
         }
         .environment(uiState)
         .environment(sessions)
+        .task {
+            hub.configure(sessions: sessions, context: context, uiState: uiState)
+            hub.sync(channelIDs: allChannels.map(\.id))
+        }
+        .onChange(of: allChannels.map(\.id)) { _, ids in
+            hub.sync(channelIDs: ids)
+        }
     }
 
     /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。

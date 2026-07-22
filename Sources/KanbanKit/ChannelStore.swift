@@ -32,6 +32,26 @@ public struct PeerInfo: Codable, Sendable {
     }
 }
 
+/// 有向メッセージ(fleet_message / fleet_handoff)。outbox.jsonl に追記され、
+/// Fleet 本体の常駐 watcher が宛先カードの live セッションへ配信する。
+public struct OutboxMessage: Codable, Identifiable, Sendable {
+    public let id: String
+    public let fromID: String
+    public let from: String        // 送信者の表示名
+    public let to: String          // 宛先の表示名(LLM が指定)
+    public let toID: String?       // 解決済みの宛先カード UUID(あれば)
+    public let kind: String        // "message" | "handoff"
+    public let text: String
+    public let createdAt: Date
+
+    public init(id: String = UUID().uuidString, fromID: String, from: String,
+                to: String, toID: String? = nil, kind: String = "message",
+                text: String, createdAt: Date = Date()) {
+        self.id = id; self.fromID = fromID; self.from = from; self.to = to
+        self.toID = toID; self.kind = kind; self.text = text; self.createdAt = createdAt
+    }
+}
+
 /// カードとチャンネルの束縛。fleet-bridge は起動時にチャンネルdirを焼き込まず、
 /// この binding を毎操作で読んで現在のチャンネルを解決する(所属変更に追従するため)。
 public struct CardBinding: Codable, Sendable {
@@ -177,11 +197,67 @@ public enum ChannelStore {
     // MARK: - peers.json
 
     /// メンバー情報を peers.json に書き出す(fleet-bridge の fleet_peers 用)。原子書込。
+    /// 内容が変わらないときは書かない(常駐 watcher の自己トリガーによる無限ループ防止)。
     public static func writePeers(_ peers: [PeerInfo], for id: UUID) {
         ensureDir(id)
-        if let d = try? JSONEncoder().encode(peers) {
-            try? d.write(to: dir(for: id).appending(path: "peers.json"), options: .atomic)
+        guard let d = try? JSONEncoder().encode(peers) else { return }
+        let url = dir(for: id).appending(path: "peers.json")
+        if let existing = try? Data(contentsOf: url), existing == d { return }
+        try? d.write(to: url, options: .atomic)
+    }
+
+    // MARK: - Outbox(有向メッセージ)
+
+    public static func outboxFile(for id: UUID) -> URL {
+        dir(for: id).appending(path: "outbox.jsonl")
+    }
+
+    public static func appendOutbox(_ msg: OutboxMessage, to id: UUID) {
+        ensureDir(id)
+        guard let data = try? encoder().encode(msg),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line += "\n"
+        withChannelLock(dir(for: id)) {
+            appendLineAtomically(Data(line.utf8), to: outboxFile(for: id))
         }
+    }
+
+    public static func outbox(for id: UUID) -> [OutboxMessage] {
+        guard let text = try? String(contentsOf: outboxFile(for: id), encoding: .utf8) else { return [] }
+        let dec = decoder()
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let d = line.data(using: .utf8) else { return nil }
+            return try? dec.decode(OutboxMessage.self, from: d)
+        }
+    }
+
+    // MARK: - 配信カーソル(宛先カード毎に配信済みメッセージ id)
+
+    private static func deliveredFile(cardID: UUID, channelID: UUID) -> URL {
+        dir(for: channelID).appending(path: "delivered-\(cardID.uuidString).json")
+    }
+    public static func deliveredIDs(cardID: UUID, channelID: UUID) -> Set<String> {
+        guard let d = try? Data(contentsOf: deliveredFile(cardID: cardID, channelID: channelID)),
+              let arr = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+        return Set(arr)
+    }
+    public static func writeDelivered(_ ids: Set<String>, cardID: UUID, channelID: UUID) {
+        ensureDir(channelID)
+        if let d = try? JSONEncoder().encode(Array(ids)) {
+            try? d.write(to: deliveredFile(cardID: cardID, channelID: channelID), options: .atomic)
+        }
+    }
+
+    // MARK: - Agent 自己申告ステータス(fleet_status)
+
+    public static func statusFile(cardID: UUID, channelID: UUID) -> URL {
+        dir(for: channelID).appending(path: "status-\(cardID.uuidString).json")
+    }
+    /// status-<cardID>.json の task 文字列(Agent が fleet_status で申告した現在の作業)。
+    public static func readStatus(cardID: UUID, channelID: UUID) -> String? {
+        guard let d = try? Data(contentsOf: statusFile(cardID: cardID, channelID: channelID)),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        return obj["task"] as? String
     }
 
     // MARK: - カード束縛(binding.json)

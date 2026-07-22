@@ -362,6 +362,36 @@ struct BoardStoreTests {
         #expect(Set(texts) == Set(["from-dst", "from-src-1", "from-src-2"]))
     }
 
+    /// outbox の追記・読み出しと配信カーソルが往復する。
+    @Test func outboxAndDeliveryCursorRoundTrip() throws {
+        let chID = UUID(); let toID = UUID()
+        defer { ChannelStore.removeDir(for: chID) }
+        let m = OutboxMessage(fromID: "a", from: "cardA", to: "cardB", toID: toID.uuidString,
+                              kind: "handoff", text: "take over")
+        ChannelStore.appendOutbox(m, to: chID)
+        let read = ChannelStore.outbox(for: chID)
+        #expect(read.count == 1)
+        #expect(read.first?.kind == "handoff")
+        #expect(read.first?.toID == toID.uuidString)
+
+        #expect(ChannelStore.deliveredIDs(cardID: toID, channelID: chID).isEmpty)
+        ChannelStore.writeDelivered([m.id], cardID: toID, channelID: chID)
+        #expect(ChannelStore.deliveredIDs(cardID: toID, channelID: chID) == [m.id])
+    }
+
+    /// peers.json は内容が同じなら書き直さない(watcher の自己トリガー防止)。
+    @Test func writePeersSkipsWhenUnchanged() throws {
+        let chID = UUID()
+        defer { ChannelStore.removeDir(for: chID) }
+        let peers = [PeerInfo(id: "1", name: "a", status: "idle")]
+        ChannelStore.writePeers(peers, for: chID)
+        let url = ChannelStore.dir(for: chID).appending(path: "peers.json")
+        let mtime1 = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        ChannelStore.writePeers(peers, for: chID)   // 同内容 → 書かない
+        let mtime2 = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        #expect(mtime1 == mtime2)
+    }
+
     // MARK: helpers
 
     private func readPeers(_ id: UUID) -> [PeerInfo]? {
