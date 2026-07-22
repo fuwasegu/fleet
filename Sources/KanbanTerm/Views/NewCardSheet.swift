@@ -11,7 +11,6 @@ struct NewCardSheet: View {
     @State private var title = ""
     @State private var directory: String?
     @State private var picking = false
-    @State private var autoStart = false
     @State private var danger = false
     @State private var kind: AgentKind = .claude
 
@@ -54,17 +53,14 @@ struct NewCardSheet: View {
                 .labelsHidden()
             }
 
-            Toggle("Agent を最初から起動する", isOn: $autoStart)
+            // カードを開くと Agent は自動起動・自動復帰するので、起動トグルは廃止。
             Toggle("権限確認をスキップ (自動承認)", isOn: $danger)
-                .disabled(!autoStart)
-                .padding(.leading, 18)
-                .foregroundStyle(autoStart ? .primary : .secondary)
 
             HStack {
                 Spacer()
                 Button("キャンセル") { dismiss() }
                 Button("作成") {
-                    onCreate(resolvedTitle, directory, autoStart, autoStart && danger, kind)
+                    onCreate(resolvedTitle, directory, true, danger, kind)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

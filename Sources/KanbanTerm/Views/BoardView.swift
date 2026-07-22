@@ -138,7 +138,9 @@ struct BoardView: View {
                     TerminalView(
                         cardID: id,
                         directory: card.workingDirPath,
-                        startAgent: card.autoStartAgent || uiState.resumeRequests[id] != nil,
+                        // どのカードも開いた時点で Agent を起動/自動復帰する(初回のみ。以降は
+                        // 生きているセッションをそのまま表示)。Fleet はエージェント盤面なので既定で起動。
+                        startAgent: true,
                         dangerSkip: card.dangerSkip,
                         resumeSessionID: uiState.resumeRequests[id],
                         sessions: sessions,

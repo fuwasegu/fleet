@@ -336,49 +336,20 @@ final class TerminalSessions {
             if dangerSkip { cmd += " --permission-mode bypassPermissions" }
             return cmd
         case .codex:
-            // Codex は MCP を config.toml で読む。CODEX_HOME をカード毎に向け、そこへ
-            // config.toml(fleet-bridge) と AGENTS.md(共通指示)を生成する(~/.codex 非汚染)。
-            var prefix = ""
-            var home: String?
-            if let h = writeCodexConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
-                prefix = "CODEX_HOME=\(shellQuote(h)) "; home = h
+            // Codex はユーザーの ~/.codex(認証・モデル設定)をそのまま使う。CODEX_HOME を差し替えると
+            // 認証(auth.json)や設定が失われて 401 になるため、fleet-bridge は起動時の -c 上書きで
+            // MCP サーバとして注入する(実測: codex exec で fleet_peers 呼び出し成功)。
+            ChannelStore.writeBinding(cardID: cardID, channel: card.channel?.id, name: card.title)
+            var cmd = "codex"
+            if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
+                cmd += " -c " + shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
+                cmd += " -c " + shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
+            } else {
+                NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
-            var cmd = prefix + "codex"
-            // カード毎 CODEX_HOME なので、過去セッションがあれば --last で決定的に自動復帰。
-            if let home, codexHasSessions(home) { cmd += " resume --last" }
             if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
             return cmd
         }
-    }
-
-    /// CODEX_HOME/sessions 配下にセッション(rollout jsonl)が1つでもあるか。
-    private static func codexHasSessions(_ home: String) -> Bool {
-        let dir = (home as NSString).appendingPathComponent("sessions")
-        guard let en = FileManager.default.enumerator(atPath: dir) else { return false }
-        for case let f as String in en where f.hasSuffix(".jsonl") { return true }
-        return false
-    }
-
-    /// Codex 用の CODEX_HOME(config.toml + AGENTS.md)を生成してパスを返す。
-    /// binding は ~/.fleet 側に書く(fleet-bridge が参照するのはそちら)。CODEX_HOME は
-    /// codex 自身の設定/セッション置き場で、ユーザーの ~/.codex とは分離する。
-    private static func writeCodexConfig(cardID: UUID, cardTitle: String, channelID: UUID?) -> String? {
-        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") else {
-            NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
-            return nil
-        }
-        ChannelStore.writeBinding(cardID: cardID, channel: channelID, name: cardTitle)
-        let home = ChannelStore.cardDir(for: cardID).appendingPathComponent("codex-home")
-        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        let toml = """
-        [mcp_servers.fleet]
-        command = \(tomlString(helper.path))
-        args = ["--card", \(tomlString(cardID.uuidString))]
-        """
-        try? toml.write(to: home.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
-        // Codex は AGENTS.md をネイティブに読む(共通指示 = Fleet の systemPrompt)。
-        try? systemPrompt().write(to: home.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
-        return home.path
     }
 
     private static func tomlString(_ s: String) -> String {
