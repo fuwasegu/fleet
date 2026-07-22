@@ -5,8 +5,8 @@
 <h1 align="center">Fleet</h1>
 
 <p align="center">
-  複数の Claude Code エージェントを「艦隊」として率いる、カンバン × ターミナルの macOS アプリ。<br>
-  どのエージェントが動作中か・承認待ちか・完了したかを、ターミナルを開かずに一望。
+  Claude Code / Codex エージェントのためのカンバン × ターミナル（macOS）。<br>
+  どのエージェントが作業中か・承認待ちか・完了かを、ターミナルを開かずに把握。
 </p>
 
 <p align="center">

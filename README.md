@@ -5,8 +5,8 @@
 <h1 align="center">Fleet</h1>
 
 <p align="center">
-  Command a fleet of Claude Code agents from a Kanban board × terminal, on macOS.<br>
-  See which agent is working, waiting for approval, or done — without opening a single terminal.
+  A Kanban board for your Claude Code and Codex agents, on macOS.<br>
+  See which agent is working, waiting for approval, or done — without opening each terminal.
 </p>
 
 <p align="center">

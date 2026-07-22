@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fleet — Command a fleet of Claude Code agents</title>
-<meta name="description" content="Command a fleet of Claude Code agents from a Kanban board × terminal, on macOS.">
+<title>Fleet — a Kanban board for your coding agents</title>
+<meta name="description" content="Manage your Claude Code and Codex sessions as cards on a Kanban board — status at a glance, on macOS.">
 <meta property="og:title" content="Fleet">
-<meta property="og:description" content="Command a fleet of Claude Code agents — a Kanban × terminal cockpit for macOS.">
+<meta property="og:description" content="A Kanban × terminal workspace for Claude Code and Codex agents, on macOS.">
 <meta property="og:image" content="assets/icon.png">
 <link rel="icon" href="assets/icon.png">
 <style>
@@ -99,14 +99,14 @@
     <div class="eyebrow">macOS · Kanban × Terminal</div>
     <h1>Fleet</h1>
     <p class="tag">
-      <span lang="en">Command a fleet of Claude Code agents.</span>
-      <span lang="ja">並走する Claude Code エージェントを「艦隊」として率いる。</span>
+      <span lang="en">A Kanban board for your coding agents.</span>
+      <span lang="ja">コーディングエージェントのためのカンバン。</span>
     </p>
     <p class="sub">
-      <span lang="en">Line up your Claude Code (and Codex) sessions as cards on a Kanban board and see which agent is working, waiting for approval, or done — without opening a single terminal.</span>
-      <span lang="ja">複数の Claude Code（や Codex）セッションをカンバンのカードとして並べ、どのエージェントが動作中か・承認待ちか・完了したかを、ターミナルを開かずに一望する macOS アプリ。</span>
+      <span lang="en">Keep your Claude Code and Codex sessions as cards, and see which one is working, waiting for approval, or done — without opening each terminal.</span>
+      <span lang="ja">Claude Code や Codex のセッションをカードとして並べ、どれが作業中か・承認待ちか・完了かを、ターミナルを開かずに把握できます。</span>
     </p>
-    <div class="prompt">$ launch a <b>fleet</b> of agents ▸</div>
+    <div class="prompt">$ your agents, at a glance ▸</div>
     <div class="cta">
       <a class="btn primary" href="https://github.com/fuwasegu/fleet/releases/latest">▸ <span lang="en">Download</span><span lang="ja">ダウンロード</span></a>
       <a class="btn ghost" href="https://github.com/fuwasegu/fleet"><span lang="en">View on GitHub</span><span lang="ja">GitHub で見る</span></a>
@@ -122,18 +122,18 @@
   <section id="features">
     <div class="shead">
       <div class="eyebrow">What it does</div>
-      <h2><span lang="en">Know your fleet without opening a terminal</span><span lang="ja">ターミナルを開かずに、艦隊を把握する</span></h2>
+      <h2><span lang="en">See every agent at a glance</span><span lang="ja">すべてのエージェントを一目で</span></h2>
     </div>
     <div class="grid">
       <div class="card">
-        <div class="k tag-working">🔗 memory · push · locks · board</div>
-        <h3><span lang="en">Agents that actually collaborate (A2A)</span><span lang="ja">本当に協調する Agent 群 (A2A)</span></h3>
-        <p><span lang="en">Connect cards with a curve to put their agents in one channel. They share a tagged memory (fleet_recall / remember), see each other's live status (fleet_peers), push messages or hand off straight into a peer's session (fleet_message / fleet_handoff) the moment they're free, take advisory file locks (fleet_claim), and even drive the kanban board — split off a subtask as a card and delegate it (fleet_create_card). All local — no cloud.</span><span lang="ja">カードを曲線でつなぐと Agent 群が1つのチャンネルに。種別付き共有メモリ (fleet_recall / remember)、仲間のライブ状態 (fleet_peers)、相手のセッションへ直接 push・引き継ぎ (fleet_message / fleet_handoff、手が空いた瞬間に届く)、ファイルの advisory ロック (fleet_claim)、さらに盤面操作 — サブタスクをカードとして切り出し委譲 (fleet_create_card) まで可能。すべてローカル完結。</span></p>
+        <div class="k tag-working">🔗 shared context</div>
+        <h3><span lang="en">Agents that work together</span><span lang="ja">連携するエージェント</span></h3>
+        <p><span lang="en">Link two cards and their agents share a context channel — shared notes, each other's live status, direct hand-offs, file locks, even spinning off a new card to delegate. All local, no cloud.</span><span lang="ja">カードを線でつなぐと、その Agent 同士が文脈を共有。共有メモ・相手の状態・直接の引き継ぎ・ファイルロック、さらにカードを作って委譲することもできる。すべてローカル完結、クラウド不要。</span></p>
       </div>
       <div class="card">
         <div class="k"><span class="tag-working">● WORKING</span> / <span class="tag-blocked">● BLOCKED</span></div>
-        <h3><span lang="en">Live agent status</span><span lang="ja">Agent 状態の自動検出</span></h3>
-        <p><span lang="en">Working, blocked, done or idle — detected from each terminal. The active agent pulses like a radar blip.</span><span lang="ja">稼働中・承認待ち・完了・待機を端末出力から判定。稼働機はレーダーのブリップのように脈打つ。</span></p>
+        <h3><span lang="en">Live agent status</span><span lang="ja">状態を自動で検出</span></h3>
+        <p><span lang="en">Working, blocked, done or idle — detected automatically from each terminal.</span><span lang="ja">稼働中・承認待ち・完了・待機を、各ターミナルの出力から自動で判定。</span></p>
       </div>
       <div class="card">
         <div class="k tag-blocked">$ approve? (y/n)</div>
@@ -165,10 +165,10 @@
 
   <section>
     <div class="blurb">
-      <div class="eyebrow">Why "Fleet"</div>
+      <div class="eyebrow">Local &amp; private</div>
       <p style="margin-top:14px;font-size:18px">
-        <span lang="en"><b>Agents running side by side move as a fleet, not one ship at a time.</b><br>Fleet is a local, offline cockpit that gathers your scattered sessions onto a single radar.</span>
-        <span lang="ja"><b>並走する Agent は、一隻ずつではなく艦隊で動く。</b><br>Fleet はローカル完結の司令塔として、散らばったセッションを一枚のレーダーに集約する。</span>
+        <span lang="en"><b>Everything runs on your machine.</b><br>Fleet just organizes the Claude Code and Codex sessions you already run — no cloud, no accounts, no telemetry.</span>
+        <span lang="ja"><b>すべてローカルで動く。</b><br>Fleet は普段使っている Claude Code / Codex のセッションを整理するだけ。クラウドもアカウントもテレメトリもなし。</span>
       </p>
     </div>
   </section>
