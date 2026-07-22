@@ -397,6 +397,7 @@ struct CardView: View {
     @State private var pickingSession = false
     @State private var showingMemory = false
     @State private var showConnectNotice = false
+    @State private var hovering = false
 
     var body: some View {
         CardFace(
@@ -424,6 +425,7 @@ struct CardView: View {
                 uiState.cardFrames[card.id] = rect
             }
             .gesture(dragGesture)
+            .onHover { hovering = $0 }
             .overlay(alignment: .trailing) { connectionHandle }
             .contextMenu {
                 Button { uiState.terminalCardID = card.id } label: {
@@ -499,17 +501,33 @@ struct CardView: View {
     }
 
     /// カード右端の接続ポート。別カードへドラッグして文脈チャンネルを共有する。
+    /// 平常時は端に沿った細いタブ(ポートの目印)、ホバー/接続中はリンクアイコン付きの
+    /// 全円ハンドルに育つ。いずれもカード内側に収め、クリップされた半円にはしない。
     private var connectionHandle: some View {
         let color = card.channel.flatMap { Color(hex: $0.colorHex ?? "") } ?? PromptTheme.ok
-        return Circle()
-            .fill(color)
-            .frame(width: 15, height: 15)
-            .overlay(Image(systemName: "link").font(.system(size: 8, weight: .bold)).foregroundStyle(.black.opacity(0.7)))
-            .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-            .opacity(isConnecting ? 0.4 : 0.85)
-            .offset(x: 8)
-            .help("ドラッグで別カードと文脈を共有")
-            .gesture(connectGesture)
+        let active = hovering || isConnecting
+        return ZStack(alignment: .trailing) {
+            // 平常時: 端の細いタブ(常時見えて「つなげられる」と分かる目印)
+            Capsule()
+                .fill(color.opacity(0.75))
+                .frame(width: 4, height: 22)
+                .opacity(active ? 0 : 1)
+            // ホバー/接続中: リンクアイコン付きの全円ハンドル
+            Circle()
+                .fill(color)
+                .frame(width: 22, height: 22)
+                .overlay(Image(systemName: "link").font(.system(size: 10, weight: .bold)).foregroundStyle(.black.opacity(0.75)))
+                .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
+                .shadow(color: color.opacity(0.6), radius: 5)
+                .opacity(active ? (isConnecting ? 0.5 : 1) : 0)
+                .scaleEffect(active ? 1 : 0.5)
+        }
+        .frame(width: 22, height: 22, alignment: .trailing)
+        .offset(x: -4)   // カード内側に収める(クリップ回避)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: active)
+        .help("ドラッグで別カードと文脈を共有")
+        .gesture(connectGesture)
+        .allowsHitTesting(active)
     }
 
     private var connectGesture: some Gesture {
