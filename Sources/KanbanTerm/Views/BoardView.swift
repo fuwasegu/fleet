@@ -6,6 +6,7 @@ import KanbanKit
 
 struct BoardView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \BoardColumn.order) private var columns: [BoardColumn]
     @Query private var allChannels: [Channel]
     @State private var uiState = BoardUIState()
@@ -98,17 +99,22 @@ struct BoardView: View {
         .onChange(of: allChannels.map(\.id)) { _, ids in
             hub.sync(channelIDs: ids)
         }
-        // ターミナルを開いている間、cwd→ブランチ→PR を定期的に再取得する。
-        // worktree/ブランチ切替が反映されず PR が古いままになる問題への対処。
-        .task(id: uiState.terminalCardID) {
-            guard let id = uiState.terminalCardID else { return }
-            sessions.refreshCwd(for: id, context: context)
-            fetchGitInfo(for: id)
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                if Task.isCancelled { break }
-                sessions.refreshCwd(for: id, context: context)
-                fetchGitInfo(for: id)
+        // 端末を閉じてカンバンに戻った時 / アプリが前面に来た時に、稼働カードの
+        // cwd→ブランチ→PR を再取得する(端末オーバーレイ表示中は盤面が見えないので更新しない)。
+        .onChange(of: uiState.terminalCardID) { _, v in
+            if v == nil { refreshVisibleGitInfo() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshVisibleGitInfo() }
+        }
+    }
+
+    /// 盤面に見えている(=稼働セッションを持つ)カードの git 情報をまとめて再取得する。
+    private func refreshVisibleGitInfo() {
+        for column in columns {
+            for card in column.cards where sessions.hasSession(card.id) {
+                sessions.refreshCwd(for: card.id, context: context)
+                fetchGitInfo(for: card.id)
             }
         }
     }
