@@ -292,13 +292,18 @@ final class TerminalSessions {
     """
 
     /// 実際に --append-system-prompt へ渡す文字列。a2aNudge に、ユーザーが自由に書ける
-    /// ~/.fleet/AGENTS.md(存在すれば)を追記する = 「Fleet で開いたときだけ効く CLAUDE.md」。
+    /// ~/.fleet/FLEET.md(存在すれば)を追記する = 「Fleet で開いたときだけ効く CLAUDE.md」。
+    /// Claude がこのファイルを読むのではなく、Fleet が読んでここで注入する点に注意。
+    /// (旧名 AGENTS.md も後方互換で読む。)
     static func systemPrompt() -> String {
         var p = a2aNudge
-        let url = ChannelStore.fleetRoot().appendingPathComponent("AGENTS.md")
-        if let extra = try? String(contentsOf: url, encoding: .utf8),
+        let root = ChannelStore.fleetRoot()
+        let candidates = [root.appendingPathComponent("FLEET.md"),
+                          root.appendingPathComponent("AGENTS.md")]
+        if let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+           let extra = try? String(contentsOf: url, encoding: .utf8),
            !extra.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            p += "\n\n--- Fleet user instructions (~/.fleet/AGENTS.md) ---\n" + extra
+            p += "\n\n--- Fleet user instructions ---\n" + extra
         }
         return p
     }

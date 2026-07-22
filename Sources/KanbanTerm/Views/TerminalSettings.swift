@@ -152,10 +152,10 @@ struct TerminalSettingsPopover: View {
                 Button {
                     Self.openFleetInstructions()
                 } label: {
-                    Label("AGENTS.md を編集", systemImage: "doc.text")
+                    Label("共通指示 (FLEET.md) を編集", systemImage: "doc.text")
                 }
                 .buttonStyle(.link)
-                Text("Fleet から起動する全 Agent に自動で読み込まれる共通指示です(Fleet で開いたときだけ効く CLAUDE.md)。")
+                Text("Fleet が読み取り、起動する全 Agent のシステムプロンプトへ自動注入します(Fleet で開いたときだけ効く CLAUDE.md 相当)。")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -166,25 +166,33 @@ struct TerminalSettingsPopover: View {
         .onChange(of: themeID) { _, _ in sessions.applyTheme() }
     }
 
-    /// ~/.fleet/AGENTS.md を(無ければテンプレ付きで作成して)既定のエディタで開く。
+    /// ~/.fleet/FLEET.md を(無ければテンプレ付きで作成して)既定のエディタで開く。
+    /// Claude が直接読むのではなく、Fleet が読んで --append-system-prompt で注入する設定ファイル。
     private static func openFleetInstructions() {
         let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".fleet")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("AGENTS.md")
+        let url = dir.appendingPathComponent("FLEET.md")
         if !FileManager.default.fileExists(atPath: url.path) {
-            let template = """
-            # Fleet エージェント共通指示
+            let legacy = dir.appendingPathComponent("AGENTS.md")
+            if FileManager.default.fileExists(atPath: legacy.path) {
+                // 旧名を引き継ぐ
+                try? FileManager.default.moveItem(at: legacy, to: url)
+            } else {
+                let template = """
+                # Fleet 共通指示
 
-            ここに書いた内容は、Fleet から起動する全ての Claude Code エージェントの
-            システムプロンプトへ自動で追記されます(Fleet で開いたときだけ効く CLAUDE.md)。
+                このファイルは Claude が自動で読むものではありません。Fleet が読み取り、
+                起動する全ての Claude Code エージェントのシステムプロンプトへ自動で注入します
+                (Fleet で開いたときだけ効く CLAUDE.md 相当)。
 
-            例:
-            - 「共有メモリ」「共有して」「みんなに共有」と言われたら、ファイルではなく
-              fleet_remember / fleet_message(A2A 共有チャンネル)を使う。
-            - 作業の節目では fleet_remember に kind=decision で決定事項を残す。
-            - 共有リポジトリの同じファイルを触る前に fleet_claim でロックする。
-            """
-            try? template.write(to: url, atomically: true, encoding: .utf8)
+                例:
+                - 「共有メモリ」「共有して」「みんなに共有」と言われたら、ファイルではなく
+                  fleet_remember / fleet_message(A2A 共有チャンネル)を使う。
+                - 作業の節目では fleet_remember に kind=decision で決定事項を残す。
+                - 共有リポジトリの同じファイルを触る前に fleet_claim でロックする。
+                """
+                try? template.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
         NSWorkspace.shared.open(url)
     }
