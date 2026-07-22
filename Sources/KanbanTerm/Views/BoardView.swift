@@ -98,6 +98,19 @@ struct BoardView: View {
         .onChange(of: allChannels.map(\.id)) { _, ids in
             hub.sync(channelIDs: ids)
         }
+        // ターミナルを開いている間、cwd→ブランチ→PR を定期的に再取得する。
+        // worktree/ブランチ切替が反映されず PR が古いままになる問題への対処。
+        .task(id: uiState.terminalCardID) {
+            guard let id = uiState.terminalCardID else { return }
+            sessions.refreshCwd(for: id, context: context)
+            fetchGitInfo(for: id)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                if Task.isCancelled { break }
+                sessions.refreshCwd(for: id, context: context)
+                fetchGitInfo(for: id)
+            }
+        }
     }
 
     /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。
