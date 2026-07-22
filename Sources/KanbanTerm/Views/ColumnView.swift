@@ -36,11 +36,12 @@ struct ColumnView: View {
             .font(.caption)
         }
         .sheet(isPresented: $addingCard) {
-            NewCardSheet { title, dir, autoStart, danger in
+            NewCardSheet { title, dir, autoStart, danger, kind in
                 do {
                     try store.addCard(
                         title: title, to: column,
-                        workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart
+                        workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart,
+                        agentKind: kind
                     )
                 } catch {}
             }

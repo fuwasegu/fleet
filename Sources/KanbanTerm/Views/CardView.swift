@@ -68,6 +68,13 @@ struct CardFace: View {
                 if !style.status.isEmpty {
                     Text(style.status).foregroundStyle(PromptTheme.muted)
                 }
+                if card.agentKind == .codex {
+                    Text("codex")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(PromptTheme.muted)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(PromptTheme.text.opacity(0.08), in: Capsule())
+                }
                 Spacer(minLength: 4)
                 if showActions {
                     Button(action: onEdit) { Image(systemName: "pencil") }
@@ -446,10 +453,12 @@ struct CardView: View {
                 Button { changingDir = true } label: {
                     Label("作業ディレクトリを変更…", systemImage: "folder")
                 }
-                Button { pickingSession = true } label: {
-                    Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
+                if card.agentKind == .claude {   // 履歴ピッカーは現状 Claude セッション専用
+                    Button { pickingSession = true } label: {
+                        Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
+                    }
+                    .disabled(card.workingDirPath == nil)
                 }
-                .disabled(card.workingDirPath == nil)
                 Divider()
                 Button(role: .destructive) { confirmingDelete = true } label: {
                     Label("カードを削除", systemImage: "trash")

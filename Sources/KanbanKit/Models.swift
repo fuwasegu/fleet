@@ -10,6 +10,19 @@ public enum AgentState: String, Codable, CaseIterable, Sendable {
     case blocked
 }
 
+/// カードで動かすエージェントの種別。起動コマンド・状態検知・MCP 配線・共通指示の差し替え軸。
+public enum AgentKind: String, Codable, CaseIterable, Sendable {
+    case claude
+    case codex
+
+    public var displayName: String {
+        switch self {
+        case .claude: return "Claude Code"
+        case .codex:  return "Codex"
+        }
+    }
+}
+
 @Model
 public final class BoardColumn {
     public var id: UUID
@@ -69,6 +82,7 @@ public final class Card {
     public var prURL: String? = nil            // 現在ブランチに紐づく GitHub PR の URL (gh 由来)
     public var branch: String? = nil           // 現在の git ブランチ名
     public var blockedPrompt: String? = nil    // Blocked 時に端末から取り出した実際の問い(例: "Do you want to proceed?")
+    public var agentKindRaw: String = AgentKind.claude.rawValue   // 起動する Agent 種別
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -78,7 +92,8 @@ public final class Card {
                 agentState: AgentState = .unknown,
                 dangerSkip: Bool = false,
                 autoStartAgent: Bool = false,
-                seen: Bool = true) {
+                seen: Bool = true,
+                agentKind: AgentKind = .claude) {
         self.id = id
         self.title = title
         self.order = order
@@ -88,12 +103,19 @@ public final class Card {
         self.dangerSkip = dangerSkip
         self.autoStartAgent = autoStartAgent
         self.seen = seen
+        self.agentKindRaw = agentKind.rawValue
     }
 
     /// 表示用: raw 文字列と AgentState の相互変換
     public var agentState: AgentState {
         get { AgentState(rawValue: agentStateRaw) ?? .unknown }
         set { agentStateRaw = newValue.rawValue }
+    }
+
+    /// 起動する Agent 種別(claude / codex)
+    public var agentKind: AgentKind {
+        get { AgentKind(rawValue: agentKindRaw) ?? .claude }
+        set { agentKindRaw = newValue.rawValue }
     }
 
     /// "Done" 表示 = 完了(idle) かつ 未閲覧

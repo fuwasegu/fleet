@@ -71,14 +71,16 @@ public struct BoardStore {
                         to column: BoardColumn,
                         workingDirPath: String? = nil,
                         dangerSkip: Bool = false,
-                        autoStartAgent: Bool = false) throws -> Card {
+                        autoStartAgent: Bool = false,
+                        agentKind: AgentKind = .claude) throws -> Card {
         let next = (column.cards.map(\.order).max() ?? -1) + 1
         let card = Card(title: title,
                         order: next,
                         column: column,
                         workingDirPath: workingDirPath,
                         dangerSkip: dangerSkip,
-                        autoStartAgent: autoStartAgent)
+                        autoStartAgent: autoStartAgent,
+                        agentKind: agentKind)
         context.insert(card)
         try context.save()
         return card

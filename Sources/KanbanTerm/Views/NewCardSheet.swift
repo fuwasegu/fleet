@@ -1,17 +1,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import KanbanKit
 
-/// カード新規作成ショートカット: 作業ディレクトリをGUIで選び、Agent自動起動/危険モードを選ぶ。
+/// カード新規作成ショートカット: 作業ディレクトリをGUIで選び、Agent種別/自動起動/危険モードを選ぶ。
 struct NewCardSheet: View {
     @Environment(\.dismiss) private var dismiss
-    /// (title, workingDirPath?, autoStartAgent, dangerSkip)
-    let onCreate: (String, String?, Bool, Bool) -> Void
+    /// (title, workingDirPath?, autoStartAgent, dangerSkip, agentKind)
+    let onCreate: (String, String?, Bool, Bool, AgentKind) -> Void
 
     @State private var title = ""
     @State private var directory: String?
     @State private var picking = false
     @State private var autoStart = false
     @State private var danger = false
+    @State private var kind: AgentKind = .claude
 
     private var resolvedTitle: String {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,8 +45,17 @@ struct NewCardSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            Toggle("Agent (Claude) を最初から起動する", isOn: $autoStart)
-            Toggle("危険モードをスキップ (--dangerously-skip-permissions)", isOn: $danger)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("エージェント").font(.caption).foregroundStyle(.secondary)
+                Picker("エージェント", selection: $kind) {
+                    ForEach(AgentKind.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Toggle("Agent を最初から起動する", isOn: $autoStart)
+            Toggle("権限確認をスキップ (自動承認)", isOn: $danger)
                 .disabled(!autoStart)
                 .padding(.leading, 18)
                 .foregroundStyle(autoStart ? .primary : .secondary)
@@ -53,7 +64,7 @@ struct NewCardSheet: View {
                 Spacer()
                 Button("キャンセル") { dismiss() }
                 Button("作成") {
-                    onCreate(resolvedTitle, directory, autoStart, autoStart && danger)
+                    onCreate(resolvedTitle, directory, autoStart, autoStart && danger, kind)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

@@ -43,7 +43,8 @@ Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.c
 
   Just link two cards on the board — the tools activate immediately, no restart needed. So parallel agents stop duplicating work and start coordinating. All local — no cloud.
 - **Per-Fleet agent instructions** — write `~/.fleet/FLEET.md` (editable from Settings). Fleet reads it and injects it into every agent it launches via `--append-system-prompt` — so it applies only inside Fleet, without touching your repo's `CLAUDE.md` (e.g. "when I say 'share this', use the fleet tools").
-- **Agent status at a glance** — Working / Blocked / Done / Idle, detected automatically from each terminal (OSC title + structured matching, inspired by herdr). Blocked cards show the agent's *actual* question.
+- **Agent status at a glance** — Working / Blocked / Done / Idle, detected automatically from each terminal by a data-driven engine (OSC title + region/priority pattern rules, inspired by herdr). Blocked cards show the agent's *actual* question.
+- **Claude Code and Codex** — pick the agent kind per card. Each gets the A2A tools wired in (Claude via `--mcp-config`, Codex via a per-card `CODEX_HOME`/`config.toml`), plus kind-specific state detection. (Codex support is new — please report rough edges.)
 - **A full terminal per card** — launch a real terminal (SwiftTerm) full-screen from any card; the session keeps running after you close it.
 - **Resume past sessions** — pick a previous Claude Code session (`claude --resume`) with a preview of its last conversation, so you never resume the wrong one.
 - **Context on every card** — working directory, git branch, and the linked GitHub PR. Built-in Markdown preview with Mermaid diagrams and syntax highlighting (fully offline).

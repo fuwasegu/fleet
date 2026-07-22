@@ -50,62 +50,18 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         }
     }
 
-    /// herdr 方式の優先度付き判定。判定不能なら nil(状態維持)。
-    /// 1. タイトル先頭がスピナー → Working   2. バッファに権限/選択プロンプト → Blocked
-    /// 3. タイトル先頭が ✳ or プロンプトボックスに ❯ → Idle   4. フォールバックでフッタ走査
+    /// データ駆動の検知エンジン(KanbanKit.AgentDetection)へ委譲。判定不能なら nil(状態維持)。
+    /// Blocked のときは端末バッファから実際の問いも取り出す。
     private func classify() -> (AgentState, String?)? {
         let lines = bottomLines(24)
-        let lower = lines.joined(separator: "\n").lowercased()
-
-        // 1) 権限/選択プロンプト = Blocked を最優先。待機中はタイトルにスピナーが残っていても
-        //    「入力待ち」が真実なので、構造照合で確実に拾えたら Working より優先する
-        //    (ウィンドウ非アクティブ時にタイトルのスピナー除去が遅れて Working 誤判定するのを防ぐ)。
-        if isBlockedPrompt(lower) {
-            return (.blocked, Self.extractQuestion(from: lines))
-        }
-
-        // 2) OSC タイトルのスピナー(点字 U+2800–28FF)= 稼働中
-        if let first = latestTitle.unicodeScalars.first, (0x2800...0x28FF).contains(first.value) {
-            return (.working, nil)
-        }
-
-        // 3) Idle: タイトル先頭が ✳(U+2733) or 入力プロンプト行(❯)が出ている
-        if latestTitle.unicodeScalars.first?.value == 0x2733 || hasIdlePromptCaret(lines) {
-            return (.idle, nil)
-        }
-
-        // 4) フォールバック: 実行中フッタ
-        if lower.contains("esc to interrupt") { return (.working, nil) }
-
-        return nil   // 判定不能 → 状態維持
+        guard let state = AgentDetection.classify(kind: agentKind, title: latestTitle, lines: lines) else { return nil }
+        let question = (state == .blocked) ? Self.extractQuestion(from: lines) : nil
+        return (state, question)
     }
 
-    /// 権限プロンプト/選択フォーム(Blocked)の構造照合。いずれも選択メニューを伴う構造で照合し
-    /// 誤検出を抑える。
-    private func isBlockedPrompt(_ lower: String) -> Bool {
-        // 選択メニュー(❯ / 番号選択 / yes・no)を伴うか
-        let hasMenu = lower.contains("❯")
-            || (lower.contains("1.") && lower.contains("2."))
-            || (lower.contains("yes") && lower.contains("no"))
-        // 権限プロンプト
-        if lower.contains("do you want to proceed?") { return true }
-        if lower.contains("do you want to") && hasMenu { return true }
-        if lower.contains("would you like to") && hasMenu { return true }
-        if lower.contains("cannot be auto-allowed") && hasMenu { return true }  // Bash(...) prefix rule 等
-        if lower.contains("waiting for permission") { return true }
-        // 選択フォーム(esc to cancel + ナビゲーション導線)
-        if lower.contains("esc to cancel")
-            && (lower.contains("enter to select")
-                || lower.contains("to navigate")
-                || lower.contains("arrow keys")) { return true }
-        return false
-    }
-
-    /// 入力待ちのプロンプトキャレット(❯)が出ているか。ただしブロッカー文言があるときは除外。
-    private func hasIdlePromptCaret(_ lines: [String]) -> Bool {
-        let lower = lines.joined(separator: "\n").lowercased()
-        guard !lower.contains("enter to select"), !lower.contains("esc to cancel") else { return false }
-        return lines.contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
+    /// このカードのエージェント種別(検知ルールの切替に使う)。
+    private var agentKind: AgentKind {
+        BoardStore(context: context).card(withID: cardID)?.agentKind ?? .claude
     }
 
     private func bottomLines(_ n: Int) -> [String] {
@@ -279,29 +235,10 @@ final class TerminalSessions {
             execName: nil,
             currentDirectory: Self.resolve(directory)
         )
-        if startAgent {
-            // インタラクティブシェルへ「入力」として送るため、session id は必ず検証する。
-            // (id は ~/.claude/projects 配下のファイル名由来。細工されたファイル名による
-            //  コマンドインジェクションを防ぐため、UUID 相当の文字種のみ許可)
-            var cmd = "claude"
-            if let sid = resumeSessionID,
-               sid.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil {
-                cmd += " --resume \(sid)"
-            }
-            // A2A: 常に fleet-bridge(MCP) を接続する。未接続でもツールは載り(呼ぶと「未接続」と返る)、
-            // あとから盤面で繋いだ瞬間に binding.json 経由で有効化される(claude 再起動が不要)。
-            // 設定は JSON をファイルに書き出してパス渡し(シェルへ JSON を打たず注入回避)。
-            if let card = BoardStore(context: context).card(withID: cardID),
-               let cfgPath = Self.writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
-                cmd += " --mcp-config \(Self.shellQuote(cfgPath))"
-                cmd += " --append-system-prompt \(Self.shellQuote(Self.systemPrompt()))"
-            } else {
-                NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
-            }
-            // 権限バイパスは --dangerously-skip-permissions ではなく --permission-mode bypassPermissions を使う。
-            // 前者は一度きりの受諾画面を持ち、履歴からの --resume では毎回権限プロンプトが出てしまう。
-            // 後者はセッションの permission mode を明示設定するので、fresh でも resume でも一貫して効く。
-            if dangerSkip { cmd += " --permission-mode bypassPermissions" }
+        if startAgent, let card = BoardStore(context: context).card(withID: cardID) {
+            let cmd = Self.launchCommand(kind: card.agentKind, cardID: cardID, cardTitle: card.title,
+                                         channelID: card.channel?.id, resumeSessionID: resumeSessionID,
+                                         dangerSkip: dangerSkip)
             let bytes = ArraySlice(Array((cmd + "\n").utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
             term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
@@ -363,6 +300,67 @@ final class TerminalSessions {
         let cfgURL = cardDir.appendingPathComponent("mcp.json")
         try? data.write(to: cfgURL)
         return cfgURL.path
+    }
+
+    /// エージェント種別に応じた起動コマンド文字列を組み立てる(シェルへ「入力」として送る)。
+    /// session id は UUID 相当の文字種のみ許可(細工ファイル名によるコマンドインジェクション防止)。
+    static func launchCommand(kind: AgentKind, cardID: UUID, cardTitle: String, channelID: UUID?,
+                             resumeSessionID: String?, dangerSkip: Bool) -> String {
+        let sid = resumeSessionID.flatMap {
+            $0.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil ? $0 : nil
+        }
+        switch kind {
+        case .claude:
+            var cmd = "claude"
+            if let sid { cmd += " --resume \(sid)" }
+            // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
+            if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: cardTitle, channelID: channelID) {
+                cmd += " --mcp-config \(shellQuote(cfgPath))"
+                cmd += " --append-system-prompt \(shellQuote(systemPrompt()))"
+            } else {
+                NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
+            }
+            // 権限バイパスは resume でも一貫して効く --permission-mode bypassPermissions を使う。
+            if dangerSkip { cmd += " --permission-mode bypassPermissions" }
+            return cmd
+        case .codex:
+            // Codex は MCP を config.toml で読む。CODEX_HOME をカード毎に向け、そこへ
+            // config.toml(fleet-bridge) と AGENTS.md(共通指示)を生成する(~/.codex 非汚染)。
+            var prefix = ""
+            if let home = writeCodexConfig(cardID: cardID, cardTitle: cardTitle, channelID: channelID) {
+                prefix = "CODEX_HOME=\(shellQuote(home)) "
+            }
+            var cmd = prefix + "codex"
+            if let sid { cmd += " resume \(sid)" }
+            if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
+            return cmd
+        }
+    }
+
+    /// Codex 用の CODEX_HOME(config.toml + AGENTS.md)を生成してパスを返す。
+    /// binding は ~/.fleet 側に書く(fleet-bridge が参照するのはそちら)。CODEX_HOME は
+    /// codex 自身の設定/セッション置き場で、ユーザーの ~/.codex とは分離する。
+    private static func writeCodexConfig(cardID: UUID, cardTitle: String, channelID: UUID?) -> String? {
+        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") else {
+            NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
+            return nil
+        }
+        ChannelStore.writeBinding(cardID: cardID, channel: channelID, name: cardTitle)
+        let home = ChannelStore.cardDir(for: cardID).appendingPathComponent("codex-home")
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let toml = """
+        [mcp_servers.fleet]
+        command = \(tomlString(helper.path))
+        args = ["--card", \(tomlString(cardID.uuidString))]
+        """
+        try? toml.write(to: home.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        // Codex は AGENTS.md をネイティブに読む(共通指示 = Fleet の systemPrompt)。
+        try? systemPrompt().write(to: home.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+        return home.path
+    }
+
+    private static func tomlString(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     /// インタラクティブシェルへ打つ文字列の単一引用符クオート。
