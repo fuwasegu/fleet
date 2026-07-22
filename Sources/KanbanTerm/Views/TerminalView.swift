@@ -329,7 +329,10 @@ final class TerminalSessions {
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
             if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
                 cmd += " --mcp-config \(shellQuote(cfgPath))"
-                cmd += " --append-system-prompt \(shellQuote(systemPrompt()))"
+                // nudge はファイルに書き出し "$(cat …)" で渡す。巨大な文字列を「キー入力」として
+                // 打ち込むと端末の1行入力上限(MAX_CANON≈1024B)を超えて途中で止まるため。
+                let promptPath = writePromptFile(cardID: cardID)
+                cmd += " --append-system-prompt \"$(cat \(shellQuote(promptPath)))\""
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -350,6 +353,15 @@ final class TerminalSessions {
             if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
             return cmd
         }
+    }
+
+    /// systemPrompt をカードのディレクトリに書き出し、パスを返す(長文をシェルに直打ちしない)。
+    private static func writePromptFile(cardID: UUID) -> String {
+        let dir = ChannelStore.cardDir(for: cardID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("prompt.txt")
+        try? systemPrompt().write(to: url, atomically: true, encoding: .utf8)
+        return url.path
     }
 
     private static func tomlString(_ s: String) -> String {
