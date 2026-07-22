@@ -40,6 +40,20 @@ final class A2AChannelHub {
         schedule(chID)
     }
 
+    /// 接続直後に呼ぶ。稼働中で手が空いているメンバーへ「接続されたよ」を1回注入して即気づかせる。
+    /// (bridge は常時接続なのでツール自体は既にあり、再起動は不要。これは能動利用のきっかけ。)
+    func announceConnect(_ channelID: UUID) {
+        guard let context, let ch = BoardStore(context: context).channel(withID: channelID) else { return }
+        let store = BoardStore(context: context)
+        store.syncChannel(ch)   // peers/binding を先に反映(bridge が解決できるように)
+        let msg = "[Fleet] Your card is now connected to a shared context channel. Call fleet_peers to see who's here and fleet_recall to read shared notes; use fleet_remember / fleet_message to collaborate. (\"共有メモリ/共有して\" from the user means these fleet tools.)"
+        for c in ch.cards where sessions?.hasSession(c.id) == true {
+            if store.card(withID: c.id)?.agentState == .idle {
+                sessions?.inject(msg, into: c.id)
+            }
+        }
+    }
+
     private func startWatch(_ id: UUID) {
         let dir = ChannelStore.dir(for: id)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

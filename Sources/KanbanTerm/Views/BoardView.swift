@@ -90,6 +90,7 @@ struct BoardView: View {
         }
         .environment(uiState)
         .environment(sessions)
+        .environment(hub)
         .task {
             hub.configure(sessions: sessions, context: context, uiState: uiState)
             hub.sync(channelIDs: allChannels.map(\.id))

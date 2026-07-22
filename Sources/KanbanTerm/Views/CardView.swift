@@ -385,6 +385,7 @@ struct CardView: View {
     @Environment(\.modelContext) private var context
     @Environment(BoardUIState.self) private var uiState
     @Environment(TerminalSessions.self) private var sessions
+    @Environment(A2AChannelHub.self) private var hub
     @Bindable var card: Card
 
     @GestureState private var isDragging = false
@@ -396,7 +397,6 @@ struct CardView: View {
     @State private var changingDir = false
     @State private var pickingSession = false
     @State private var showingMemory = false
-    @State private var showConnectNotice = false
     @State private var hovering = false
 
     var body: some View {
@@ -468,11 +468,6 @@ struct CardView: View {
             .sheet(isPresented: $showingMemory) {
                 if let ch = card.channel { ChannelMemorySheet(channelID: ch.id, channelName: ch.name) }
             }
-            .alert("文脈共有を開始しました", isPresented: $showConnectNotice) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember / fleet_peers / fleet_message) が有効になります。")
-            }
             .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
                 Button("削除", role: .destructive, action: deleteCard)
                 Button("キャンセル", role: .cancel) {}
@@ -540,10 +535,9 @@ struct CardView: View {
             .onEnded { value in
                 if let targetID = uiState.cardFrames.first(where: { $0.key != card.id && $0.value.contains(value.location) })?.key,
                    let target = BoardStore(context: context).card(withID: targetID) {
-                    try? BoardStore(context: context).connectCards(card, target)
-                    // 既に起動中の Agent には共有メモリツールが「次回 claude 起動」から効くことを案内
-                    if sessions.hasSession(card.id) || sessions.hasSession(targetID) {
-                        showConnectNotice = true
+                    if let ch = try? BoardStore(context: context).connectCards(card, target) {
+                        // bridge は常時接続なので再起動は不要。稼働中の相手に「繋がったよ」を即通知する。
+                        hub.announceConnect(ch.id)
                     }
                 }
                 uiState.connectingFromCardID = nil
