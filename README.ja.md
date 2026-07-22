@@ -30,7 +30,7 @@ brew install --cask fuwasegu/tap/fleet
 
 ## スクリーンショット
 
-<img src="docs/assets/hero.png" alt="Fleet ボード">
+<img src="docs/assets/hero-ja.png" alt="Fleet ボード">
 
 ## 特徴
 

@@ -30,7 +30,7 @@ Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.c
 
 ## Screenshot
 
-<img src="docs/assets/hero.png" alt="Fleet board">
+<img src="docs/assets/hero-en.png" alt="Fleet board">
 
 ## Features
 
