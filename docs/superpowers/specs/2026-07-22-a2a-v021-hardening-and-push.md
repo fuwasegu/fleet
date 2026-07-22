@@ -62,7 +62,18 @@ peers.json は **内容が変わらないときは書かない** ため、状態
 - 実 `claude` による E2E: fleet_peers → fleet_message(toID 解決) → fleet_status が
   実バイナリ経由で outbox / status に正しく永続することを確認。
 
-## 見送り(fast-follow)
-- 構造化メモリ(kind/refs)と recall の since カーソル、ファイル/リソースの advisory ロック、
-  kanban を MCP から操作(create/claim/move)、メモリ肥大のコンパクション。いずれも同じ
-  `~/.fleet/channels/<id>/` と watcher の上に追加でき、今回の面を広げるだけで載る。
+## fast-follow(v0.3.0 で実装済み)
+予告どおり、いずれも同じ `~/.fleet/channels/<id>/` と watcher の上に載せた:
+- **構造化メモリ**: `ChannelEntry.kind`(decision|blocker|artifact|question|note)/`refs`。
+  `fleet_remember(kind, refs)`、`fleet_recall(kind, unread)`(未読カーソル
+  `recall-cursor-<cardID>.json`)。UI に kind バッジ + refs。
+- **advisory ロック**: `fleet_claim` / `fleet_release` / `fleet_locks`(`locks.json`)。
+- **kanban を MCP から操作**: `fleet_board` / `fleet_create_card` / `fleet_move_card`。
+  bridge が `board-intents.jsonl` に intent を書き、watcher が `BoardStore.applyBoardIntents`
+  で適用(create は作成元チャンネルへ自動参加=委譲、move はチャンネル内限定、破壊操作なし、
+  適用は冪等)。観測用に `board.json` スナップショット。
+
+## なお見送り
+- メモリ肥大のコンパクション/サイズ上限(現状の規模では不要)。
+- 複数チャンネル同時所属(max-1 の MVP 制約を維持)。
+- クロスマシンの独自 A2A プロトコル(ローカル完結・クラウド不要の方針から対象外)。

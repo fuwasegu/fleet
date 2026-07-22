@@ -34,7 +34,14 @@ Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.c
 
 ## Features
 
-- **Agents that actually collaborate (A2A)** — connect cards with a curve to put their agents in one context channel. Via a bundled local MCP server each agent can `fleet_recall` / `fleet_remember` a shared memory, see peers' **live status** (`fleet_peers`: working / blocked / idle, branch, PR), and **push** a message or hand off work directly into a peer's session (`fleet_message` / `fleet_handoff`) — Fleet injects it the moment that agent is free. So parallel agents stop duplicating work and start coordinating. All local — no cloud.
+- **Agents that actually collaborate (A2A)** — connect cards with a curve to put their agents in one context channel. Via a bundled local MCP server each agent can:
+  - **share memory** — `fleet_recall` / `fleet_remember`, tagged by kind (decision / blocker / artifact / question) with file/PR refs, and "what's new since I last looked"
+  - **see peers live** — `fleet_peers` shows each peer's status (working / blocked / idle / done), branch, PR, and what they're stuck on
+  - **push & hand off** — `fleet_message` / `fleet_handoff` deliver straight into a peer's session the moment they're free (not a note they might never read)
+  - **avoid clobbering** — `fleet_claim` / `fleet_release` advisory file locks for agents sharing a repo
+  - **drive the board** — `fleet_create_card` / `fleet_move_card` / `fleet_board`: an agent can split off a subtask as a real card (which joins the channel) and delegate it
+
+  So parallel agents stop duplicating work and start coordinating. All local — no cloud.
 - **Agent status at a glance** — Working / Blocked / Done / Idle, detected automatically from each terminal (OSC title + structured matching, inspired by herdr). Blocked cards show the agent's *actual* question.
 - **A full terminal per card** — launch a real terminal (SwiftTerm) full-screen from any card; the session keeps running after you close it.
 - **Resume past sessions** — pick a previous Claude Code session (`claude --resume`) with a preview of its last conversation, so you never resume the wrong one.

@@ -34,7 +34,14 @@ brew install --cask fuwasegu/tap/fleet
 
 ## 特徴
 
-- **本当に協調する Agent 群 (A2A)** — カードを曲線でつなぐと、その Agent 群が1つの文脈チャンネルに入る。同梱のローカル MCP サーバ経由で、共有メモリの読み書き (`fleet_recall` / `fleet_remember`)、仲間の**ライブ状態**確認 (`fleet_peers`: working/blocked/idle、branch、PR)、そして相手のセッションへ直接メッセージを**push**・作業を引き継ぐ (`fleet_message` / `fleet_handoff`) ことができる。Fleet が相手の手が空いた瞬間に注入するので、並走する Agent が重複作業をやめて協調し始める。すべてローカル完結（クラウド不要）。
+- **本当に協調する Agent 群 (A2A)** — カードを曲線でつなぐと、その Agent 群が1つの文脈チャンネルに入る。同梱のローカル MCP サーバ経由で:
+  - **共有メモリ** — `fleet_recall` / `fleet_remember`。種別(decision/blocker/artifact/question)と参照(ファイル/PR)を付与、「前回以降の新着」も取得可
+  - **仲間のライブ状態** — `fleet_peers` で各 agent の状態(working/blocked/idle/done)・branch・PR・詰まっている内容が見える
+  - **push と引き継ぎ** — `fleet_message` / `fleet_handoff` が相手の手が空いた瞬間にセッションへ直接届く(読まれないかもしれないノートではなく)
+  - **衝突回避** — `fleet_claim` / `fleet_release` の advisory ロックで、同じリポジトリを触る agent 同士のファイル衝突を防ぐ
+  - **盤面の操作** — `fleet_create_card` / `fleet_move_card` / `fleet_board`。agent がサブタスクを実カードとして切り出し(チャンネルに自動参加)、委譲できる
+
+  並走する Agent が重複作業をやめて協調し始める。すべてローカル完結（クラウド不要）。
 - **エージェントの状態を一目で** — 動作中 / 承認待ち / 完了 / 待機 を各ターミナルから自動検出（OSC タイトル + 構造照合、herdr 方式）。承認待ちカードにはエージェントの *実際の問い* を表示。
 - **カードごとにフル装備のターミナル** — 各カードから本物のターミナル（SwiftTerm）を全画面起動。閉じてもセッションは動き続ける。
 - **過去セッションから再開** — 以前の Claude Code セッションを直近会話のプレビュー付きで選んで `claude --resume`。誤ったセッションを掴まない。
