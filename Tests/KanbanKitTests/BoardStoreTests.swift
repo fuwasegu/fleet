@@ -300,4 +300,78 @@ struct BoardStoreTests {
         #expect(a.cards.first?.order == 0)
         #expect(a.cards.first?.title == "1")
     }
+
+    // MARK: - A2A ファイル層 (binding / 破損行温存 / merge)
+
+    /// 接続で各カードの binding.json が現在チャンネルを指し、peers.json に両者が入る。
+    @Test func connectWritesBindingAndPeers() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        #expect(ChannelStore.readBinding(cardID: a.id)?.channel == ch.id.uuidString)
+        #expect(ChannelStore.readBinding(cardID: b.id)?.channel == ch.id.uuidString)
+        let peers = try #require(readPeers(ch.id))
+        #expect(Set(peers.map(\.id)) == Set([a.id.uuidString, b.id.uuidString]))
+    }
+
+    /// 解除(解散)で離脱カードの binding が無所属になる。
+    @Test func disconnectClearsBinding() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+        try store.disconnectCard(a)
+        #expect(ChannelStore.readBinding(cardID: a.id)?.channel == nil)
+        #expect(ChannelStore.readBinding(cardID: b.id)?.channel == nil)
+    }
+
+    /// deleteEntry はデコード不能な行を巻き添えで消さない(MEDIUM-3)。
+    @Test func deleteEntryPreservesCorruptLines() throws {
+        let chID = UUID()
+        defer { ChannelStore.removeDir(for: chID) }
+        // 正常エントリ1件 + 壊れた行1件を用意
+        ChannelStore.append("valid note", author: "a", authorID: "aid", to: chID)
+        let valid = try #require(ChannelStore.entries(for: chID).first)
+        let mem = ChannelStore.memoryFile(for: chID)
+        let raw = (try? String(contentsOf: mem, encoding: .utf8)) ?? ""
+        try (raw + "{not valid json}\n").write(to: mem, atomically: true, encoding: .utf8)
+
+        ChannelStore.deleteEntry(valid.id, from: chID)   // 正常エントリだけ消す
+        let after = ChannelStore.rawLines(for: chID)
+        #expect(after.count == 1)                         // 壊れた行は残る
+        #expect(after.first?.contains("not valid json") == true)
+        #expect(ChannelStore.entries(for: chID).isEmpty)  // 正常エントリは消えた
+    }
+
+    /// merge は両チャンネルの全エントリを温存する(追記ベース)。
+    @Test func mergeMemoryKeepsAllEntries() throws {
+        let src = UUID(); let dst = UUID()
+        defer { ChannelStore.removeDir(for: src); ChannelStore.removeDir(for: dst) }
+        ChannelStore.append("from-dst", author: "d", to: dst)
+        ChannelStore.append("from-src-1", author: "s", to: src)
+        ChannelStore.append("from-src-2", author: "s", to: src)
+        ChannelStore.mergeMemory(from: src, into: dst)
+        let texts = ChannelStore.entries(for: dst).map(\.text)
+        #expect(texts.count == 3)
+        #expect(Set(texts) == Set(["from-dst", "from-src-1", "from-src-2"]))
+    }
+
+    // MARK: helpers
+
+    private func readPeers(_ id: UUID) -> [PeerInfo]? {
+        let url = ChannelStore.dir(for: id).appending(path: "peers.json")
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([PeerInfo].self, from: d)
+    }
+
+    private func cleanup(cards: [UUID], channels: [UUID]) {
+        for c in cards { ChannelStore.removeBinding(cardID: c) }
+        for c in channels { ChannelStore.removeDir(for: c) }
+    }
 }

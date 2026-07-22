@@ -89,10 +89,9 @@ public struct BoardStore {
         guard !trimmed.isEmpty else { throw BoardError.emptyName }
         card.title = trimmed
         try context.save()
-        // A2A: カード名は Agent の識別名(author/peers)なので peers.json を追従させる
-        if let ch = card.channel {
-            ChannelStore.writePeers(ch.cards.map(\.title), for: ch.id)
-        }
+        // A2A: 表示名は peers/binding に出るので追従させる(識別子は id なので改名は安全)
+        if let ch = card.channel { syncChannel(ch) }
+        else { ChannelStore.writeBinding(cardID: card.id, channel: nil, name: card.title) }
     }
 
     public func setCardDirectory(_ card: Card, path: String?) throws {
@@ -122,6 +121,9 @@ public struct BoardStore {
             if card.blockedPrompt != nil { card.blockedPrompt = nil; changed = true }
         }
         if changed { try context.save() }
+        // A2A: ディスク上の peers/binding も現在の(=未起動)状態へ同期し、
+        // 前回セッションの古い status がファイルに残らないようにする。
+        for ch in (try? channels()) ?? [] { syncChannel(ch) }
     }
 
     public func card(withID id: UUID) -> Card? {
@@ -135,7 +137,9 @@ public struct BoardStore {
     }
 
     public func deleteCard(_ card: Card) throws {
+        let cardID = card.id
         try disconnectCard(card)   // A2A: チャンネルから離脱(1枚チャンネルの残留防止)
+        ChannelStore.removeBinding(cardID: cardID)   // カード用ディレクトリごと掃除
         let column = card.column
         context.delete(card)
         try context.save()
@@ -193,31 +197,67 @@ public struct BoardStore {
         case (nil, let cb?):
             a.channel = cb; channel = cb
         case (let ca?, let cb?):
-            // cb を ca へ合流(メモリも移す)
-            ChannelStore.mergeMemory(from: cb.id, into: ca.id)
-            for c in cb.cards { c.channel = ca }
-            ChannelStore.removeDir(for: cb.id)
-            context.delete(cb)
+            // cb を ca へ合流。順序が重要: (1)メモリを ca へ移す → (2)所属/binding を ca へ
+            // → (3)最後に cb dir を削除。稼働中 bridge は binding 経由で解決するので、
+            //    binding 更新後に dir を消せば書込先が失われない(HIGH-1 回避)。
+            let cbID = cb.id
+            let moved = cb.cards
+            ChannelStore.mergeMemory(from: cbID, into: ca.id)
+            for c in moved { c.channel = ca; ChannelStore.removeMCPConfig(cardID: c.id, channelID: cbID) }
             channel = ca
+            context.delete(cb)
+            try context.save()
+            syncChannel(ca)                 // 移動カードの binding を ca へ更新
+            ChannelStore.removeDir(for: cbID)
+            return channel
         }
         try context.save()
-        ChannelStore.writePeers(channel.cards.map(\.title), for: channel.id)
+        syncChannel(channel)
         return channel
     }
 
     /// カードをチャンネルから外す。残り1枚以下になったチャンネルは解散する。
     public func disconnectCard(_ card: Card) throws {
         guard let ch = card.channel else { return }
+        let leavingID = card.id
+        let chID = ch.id
         card.channel = nil
         try context.save()
+        // 離脱カードは binding を無所属に(稼働中 bridge は次操作で「未所属」を検知して書込を止める)。
+        ChannelStore.writeBinding(cardID: leavingID, channel: nil, name: card.title)
+        ChannelStore.removeMCPConfig(cardID: leavingID, channelID: chID)
         if ch.cards.count < 2 {
-            for c in ch.cards { c.channel = nil }
-            ChannelStore.removeDir(for: ch.id)
+            for c in ch.cards {
+                ChannelStore.writeBinding(cardID: c.id, channel: nil, name: c.title)
+                ChannelStore.removeMCPConfig(cardID: c.id, channelID: chID)
+                c.channel = nil
+            }
             context.delete(ch)
             try context.save()
+            ChannelStore.removeDir(for: chID)
         } else {
-            ChannelStore.writePeers(ch.cards.map(\.title), for: ch.id)
+            syncChannel(ch)
         }
+    }
+
+    /// チャンネルの現在メンバーで peers.json と各カードの binding.json を同期する。
+    /// A2A の「所属は可変・bridge は間接解決」を成立させる唯一の書き込み口。
+    func syncChannel(_ channel: Channel) {
+        let peers = channel.cards.map(Self.peerInfo(for:))
+        ChannelStore.writePeers(peers, for: channel.id)
+        for c in channel.cards {
+            ChannelStore.writeBinding(cardID: c.id, channel: channel.id, name: c.title)
+        }
+    }
+
+    private static func peerInfo(for card: Card) -> PeerInfo {
+        let status = card.isDone ? "done" : card.agentState.rawValue
+        return PeerInfo(id: card.id.uuidString,
+                        name: card.title,
+                        status: status,
+                        blocked: card.blockedPrompt,
+                        branch: card.branch,
+                        pr: card.prURL)
     }
 
     private func defaultChannelName(_ a: Card, _ b: Card) -> String {
