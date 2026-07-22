@@ -236,6 +236,11 @@ final class TerminalSessions {
             currentDirectory: Self.resolve(directory)
         )
         if startAgent, let card = BoardStore(context: context).card(withID: cardID) {
+            // Codex 新規起動時は、起動直前の rollout 一覧を控え、起動後に新規 id を捕捉してピン留めする。
+            if card.agentKind == .codex, Self.codexEffectiveSession(card) == nil {
+                let before = Set(Self.codexRolloutFiles())
+                captureCodexSession(cardID: cardID, context: context, before: before)
+            }
             let cmd = Self.launchCommand(card: card, directory: directory, explicitResume: resumeSessionID,
                                          dangerSkip: dangerSkip, context: context)
             let bytes = ArraySlice(Array((cmd + "\n").utf8))
@@ -343,7 +348,9 @@ final class TerminalSessions {
             // 認証(auth.json)や設定が失われて 401 になるため、fleet-bridge は起動時の -c 上書きで
             // MCP サーバとして注入する(実測: codex exec で fleet_peers 呼び出し成功)。
             ChannelStore.writeBinding(cardID: cardID, channel: card.channel?.id, name: card.title)
+            // ピン留めしたセッションが今も存在すれば resume(自動復帰)、無ければ新規起動。
             var cmd = "codex"
+            if let sid = codexEffectiveSession(card) { cmd += " resume \(sid)" }
             if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
                 cmd += " -c " + shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
                 cmd += " -c " + shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
@@ -362,6 +369,60 @@ final class TerminalSessions {
         let url = dir.appendingPathComponent("prompt.txt")
         try? systemPrompt().write(to: url, atomically: true, encoding: .utf8)
         return url.path
+    }
+
+    // MARK: - Codex セッション自動復帰(rollout ファイルから id を捕捉)
+
+    private static func codexSessionsDir() -> String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".codex/sessions")
+    }
+    /// ~/.codex/sessions 配下の rollout-*.jsonl のフルパス一覧。
+    static func codexRolloutFiles() -> [String] {
+        let dir = codexSessionsDir()
+        guard let en = FileManager.default.enumerator(atPath: dir) else { return [] }
+        var out: [String] = []
+        for case let f as String in en where f.hasSuffix(".jsonl") && f.contains("rollout-") {
+            out.append((dir as NSString).appendingPathComponent(f))
+        }
+        return out
+    }
+    /// rollout ファイル名末尾の UUID を取り出す(rollout-<ts>-<uuid>.jsonl)。
+    private static func uuid(fromRollout path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        guard let re = try? NSRegularExpression(
+            pattern: "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.jsonl$") else { return nil }
+        let r = NSRange(name.startIndex..., in: name)
+        guard let m = re.firstMatch(in: name, range: r), let rr = Range(m.range(at: 1), in: name) else { return nil }
+        return String(name[rr])
+    }
+    private static func mtime(_ path: String) -> Date {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        return (attrs?[.modificationDate] as? Date) ?? .distantPast
+    }
+    /// このカードの Codex セッションが今も存在すればその id、無ければ nil。
+    static func codexEffectiveSession(_ card: Card) -> String? {
+        guard let id = card.codexSessionID,
+              codexRolloutFiles().contains(where: { $0.hasSuffix("\(id).jsonl") }) else { return nil }
+        return id
+    }
+    /// before に無い最新の rollout の UUID(＝この起動で作られたセッション)。
+    private static func newestCodexSession(excluding before: Set<String>) -> String? {
+        let fresh = codexRolloutFiles().filter { !before.contains($0) }
+        return fresh.sorted { mtime($0) > mtime($1) }.first.flatMap { uuid(fromRollout: $0) }
+    }
+    /// 新規 Codex 起動後、rollout の出現を数秒ポーリングして id をカードにピン留めする。
+    func captureCodexSession(cardID: UUID, context: ModelContext, before: Set<String>) {
+        Task { @MainActor in
+            for _ in 0..<25 {
+                try? await Task.sleep(for: .seconds(1))
+                guard let newID = Self.newestCodexSession(excluding: before) else { continue }
+                if let card = BoardStore(context: context).card(withID: cardID) {
+                    card.codexSessionID = newID
+                    try? context.save()
+                }
+                return
+            }
+        }
     }
 
     private static func tomlString(_ s: String) -> String {

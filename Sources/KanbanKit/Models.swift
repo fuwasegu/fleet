@@ -84,6 +84,7 @@ public final class Card {
     public var blockedPrompt: String? = nil    // Blocked 時に端末から取り出した実際の問い(例: "Do you want to proceed?")
     public var agentKindRaw: String = AgentKind.claude.rawValue   // 起動する Agent 種別
     public var claudeSessionID: String? = nil   // このカードに固定した Claude セッション id(自動復帰用)
+    public var codexSessionID: String? = nil    // このカードに紐づく Codex セッション id(初回起動後に捕捉)
 
     public init(id: UUID = UUID(),
                 title: String,
