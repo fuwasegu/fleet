@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://fuwasegu.github.io/fleet/">Website</a> ·
+  <a href="https://fuwasegu.com">Website</a> ·
   <a href="https://github.com/fuwasegu/fleet/releases/latest">Download</a> ·
   <a href="README.ja.md">日本語</a>
 </p>
