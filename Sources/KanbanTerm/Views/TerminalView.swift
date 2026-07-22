@@ -54,17 +54,19 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// 1. タイトル先頭がスピナー → Working   2. バッファに権限/選択プロンプト → Blocked
     /// 3. タイトル先頭が ✳ or プロンプトボックスに ❯ → Idle   4. フォールバックでフッタ走査
     private func classify() -> (AgentState, String?)? {
-        // 1) OSC タイトルのスピナー(点字 U+2800–28FF)= 稼働中(最優先)
-        if let first = latestTitle.unicodeScalars.first, (0x2800...0x28FF).contains(first.value) {
-            return (.working, nil)
-        }
-
         let lines = bottomLines(24)
         let lower = lines.joined(separator: "\n").lowercased()
 
-        // 2) 権限/選択プロンプト = Blocked(構造ごと照合して誤検出を抑える)
+        // 1) 権限/選択プロンプト = Blocked を最優先。待機中はタイトルにスピナーが残っていても
+        //    「入力待ち」が真実なので、構造照合で確実に拾えたら Working より優先する
+        //    (ウィンドウ非アクティブ時にタイトルのスピナー除去が遅れて Working 誤判定するのを防ぐ)。
         if isBlockedPrompt(lower) {
             return (.blocked, Self.extractQuestion(from: lines))
+        }
+
+        // 2) OSC タイトルのスピナー(点字 U+2800–28FF)= 稼働中
+        if let first = latestTitle.unicodeScalars.first, (0x2800...0x28FF).contains(first.value) {
+            return (.working, nil)
         }
 
         // 3) Idle: タイトル先頭が ✳(U+2733) or 入力プロンプト行(❯)が出ている
@@ -78,12 +80,18 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         return nil   // 判定不能 → 状態維持
     }
 
-    /// 権限プロンプト/選択フォーム(Blocked)の構造照合。
+    /// 権限プロンプト/選択フォーム(Blocked)の構造照合。いずれも選択メニューを伴う構造で照合し
+    /// 誤検出を抑える。
     private func isBlockedPrompt(_ lower: String) -> Bool {
+        // 選択メニュー(❯ / 番号選択 / yes・no)を伴うか
+        let hasMenu = lower.contains("❯")
+            || (lower.contains("1.") && lower.contains("2."))
+            || (lower.contains("yes") && lower.contains("no"))
         // 権限プロンプト
         if lower.contains("do you want to proceed?") { return true }
-        if lower.contains("do you want to") && (lower.contains("yes") || lower.contains("❯")) { return true }
-        if lower.contains("would you like to") && (lower.contains("yes") || lower.contains("❯")) { return true }
+        if lower.contains("do you want to") && hasMenu { return true }
+        if lower.contains("would you like to") && hasMenu { return true }
+        if lower.contains("cannot be auto-allowed") && hasMenu { return true }  // Bash(...) prefix rule 等
         if lower.contains("waiting for permission") { return true }
         // 選択フォーム(esc to cancel + ナビゲーション導線)
         if lower.contains("esc to cancel")
