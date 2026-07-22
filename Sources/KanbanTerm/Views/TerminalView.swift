@@ -181,6 +181,33 @@ final class MonitoredTerminalView: LocalProcessTerminalView {
     private var scanTask: Task<Void, Never>?
     private var readyTask: Task<Void, Never>?
     private var readyFired = false
+    private var keyMonitor: Any?
+
+    // Shift+Enter で改行を入れる(Claude Code の複数行入力)。素の端末だと Shift+Enter も
+    // Enter と同じ CR を送ってしまい「改行できず送信される」。SwiftTerm の keyDown は override
+    // できないため、ローカルイベントモニタで Shift+Return を捕まえて LF(0x0A)を送り、既定の
+    // CR 送出を握りつぶす。フォーカスがこの端末にあるときだけ作用する。
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+            return
+        }
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.window?.isKeyWindow == true,
+                  event.keyCode == 36, event.modifierFlags.contains(.shift),
+                  self.isFocused() else { return event }
+            self.send(source: self, data: ArraySlice([0x0a]))
+            return nil   // 既定の CR を送らせない
+        }
+    }
+
+    private func isFocused() -> Bool {
+        var v = window?.firstResponder as? NSView
+        while let cur = v { if cur === self { return true }; v = cur.superview }
+        return false
+    }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)

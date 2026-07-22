@@ -24,16 +24,24 @@ enum GitHubService {
 
     /// 指定ブランチに紐づく PR の URL。
     /// worktree では `gh pr view`(引数なし)の暗黙のブランチ検出がずれて別 PR を拾うことがあるため、
-    /// ブランチ名を明示的に渡して決定的にする。branch 不明時は暗黙検出にフォールバック。
+    /// ブランチが分かるときは `gh pr list --head <branch>` で「この head を持つ PR」を決定的に引く。
+    /// (gh の暗黙のブランチ推定に依存しないので worktree でも安定する。)branch 不明時のみ暗黙検出。
     static func prURL(cwd: String, branch: String? = nil) -> String? {
         let expanded = (cwd as NSString).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: expanded) else { return nil }
 
-        let target = branch.map { " " + shellQuote($0) } ?? ""
+        let query: String
+        if let branch, !branch.isEmpty {
+            // open を優先、無ければ最新の PR。head を明示するので worktree でもずれない。
+            query = "gh pr list --head \(shellQuote(branch)) --state all --json url,state "
+                  + "--jq '([.[] | select(.state==\"OPEN\")] + .)[0].url'"
+        } else {
+            query = "gh pr view --json url -q .url"
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // ログインシェル経由で PATH を通す(homebrew の gh 等)。指定ブランチの PR URL を1行出力。
-        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && gh pr view\(target) --json url -q .url 2>/dev/null"]
+        // ログインシェル経由で PATH を通す(homebrew の gh 等)。PR URL を1行出力。
+        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && \(query) 2>/dev/null"]
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
