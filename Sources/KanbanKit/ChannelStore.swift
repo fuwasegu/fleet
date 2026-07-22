@@ -16,7 +16,7 @@ public struct ChannelEntry: Codable, Identifiable, Sendable, Hashable {
 
 /// peers.json の1メンバー。fleet_peers が返す live-aware な情報。
 /// 識別子は id(カード UUID)。status/task/blocked/branch/pr は Fleet 本体が随時更新する。
-public struct PeerInfo: Codable, Sendable {
+public struct PeerInfo: Codable, Sendable, Equatable {
     public var id: String
     public var name: String
     public var status: String?    // working | blocked | idle | done | unknown
@@ -204,7 +204,11 @@ public enum ChannelStore {
         ensureDir(id)
         guard let d = try? JSONEncoder().encode(peers) else { return false }
         let url = dir(for: id).appending(path: "peers.json")
-        if let existing = try? Data(contentsOf: url), existing == d { return false }
+        // 生バイトではなくデコードした内容で比較する。JSONEncoder のキー順が
+        // OS/Xcode で微妙に変わっても、意味が同じなら書かない(watcher の自己トリガー防止)。
+        if let existing = try? Data(contentsOf: url),
+           let old = try? JSONDecoder().decode([PeerInfo].self, from: existing),
+           old == peers { return false }
         try? d.write(to: url, options: .atomic)
         return true
     }
