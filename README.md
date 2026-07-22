@@ -41,7 +41,8 @@ Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.c
   - **avoid clobbering** — `fleet_claim` / `fleet_release` advisory file locks for agents sharing a repo
   - **drive the board** — `fleet_create_card` / `fleet_move_card` / `fleet_board`: an agent can split off a subtask as a real card (which joins the channel) and delegate it
 
-  So parallel agents stop duplicating work and start coordinating. All local — no cloud.
+  Just link two cards on the board — the tools activate immediately, no restart needed. So parallel agents stop duplicating work and start coordinating. All local — no cloud.
+- **Per-Fleet agent instructions** — put a `~/.fleet/AGENTS.md` (editable from Settings) and Fleet appends it to every agent it launches — a CLAUDE.md that only applies inside Fleet (e.g. "when I say 'share this', use the fleet tools").
 - **Agent status at a glance** — Working / Blocked / Done / Idle, detected automatically from each terminal (OSC title + structured matching, inspired by herdr). Blocked cards show the agent's *actual* question.
 - **A full terminal per card** — launch a real terminal (SwiftTerm) full-screen from any card; the session keeps running after you close it.
 - **Resume past sessions** — pick a previous Claude Code session (`claude --resume`) with a preview of its last conversation, so you never resume the wrong one.
