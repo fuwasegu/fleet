@@ -89,3 +89,6 @@
 "直近の会話" = "Recent conversation";
 "文脈共有を解除" = "Unlink Shared Context";
 "閉じる" = "Close";
+"文脈共有を開始しました" = "Shared context started";
+"すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember / fleet_peers / fleet_message) が有効になります。" = "Agents that are already running will get the shared-memory tools (fleet_recall / fleet_remember / fleet_peers / fleet_message) the next time claude starts.";
+"届いた A2A メッセージがあります(次に手が空いたら反映されます)" = "An A2A message is waiting (it will be delivered when this agent is next idle).";

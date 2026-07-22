@@ -469,7 +469,7 @@ struct CardView: View {
             .alert("文脈共有を開始しました", isPresented: $showConnectNotice) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember) が有効になります。")
+                Text("すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember / fleet_peers / fleet_message) が有効になります。")
             }
             .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
                 Button("削除", role: .destructive, action: deleteCard)
