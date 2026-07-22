@@ -290,7 +290,10 @@ final class TerminalSessions {
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
-            if dangerSkip { cmd += " --dangerously-skip-permissions" }
+            // 権限バイパスは --dangerously-skip-permissions ではなく --permission-mode bypassPermissions を使う。
+            // 前者は一度きりの受諾画面を持ち、履歴からの --resume では毎回権限プロンプトが出てしまう。
+            // 後者はセッションの permission mode を明示設定するので、fresh でも resume でも一貫して効く。
+            if dangerSkip { cmd += " --permission-mode bypassPermissions" }
             let bytes = ArraySlice(Array((cmd + "\n").utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
             term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
