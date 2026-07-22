@@ -1,0 +1,42 @@
+// A2A advisory ロック(fleet_claim / fleet_release)の相互排他を検証する。
+// 実装: Sources/fleet-bridge/main.swift の fleet_claim/fleet_release。
+//   claim(resource): locks.json を読み、他者が保持中なら失敗、そうでなければ holder=自分。
+//   release(resource): 自分が保持しているものだけ削除。
+// 検証したい安全性: 「保持中の資源を別 agent が奪えない」(no-steal)。
+//
+// ASSUME-1(表現のみ): agent 2人・資源1個で相互排他の相互作用は十分に現れる。
+spec A2ALocks "design: advisory lock mutual exclusion" {
+  symmetric type Agent = 0..1
+  type Res = 0..0                       // 競合する資源1個で十分
+
+  state {
+    holder: Map<Res, Option<Agent>>     // none = 空き
+  }
+  init {
+    forall r: Res { holder[r] = none }
+  }
+
+  // 実装の guard 通り: 空き or 自分が保持中のときだけ取れる(他者保持中は不可)。
+  action claim(a: Agent, r: Res) {
+    requires holder[r] == none or (holder[r] is some(h) and h == a)
+    holder[r] = some(a)
+  }
+
+  // 自分が保持している資源だけ解放できる。
+  action release(a: Agent, r: Res) {
+    requires holder[r] is some(h) and h == a
+    holder[r] = none
+  }
+
+  // 安全性(本命): 保持中(some(b))の資源は、空きに戻るか同じ保持者のままにしかならない。
+  // = 別 agent が横取りできない。claim の guard を消すとここが破れる。
+  trans NoSteal {
+    forall r: Res {
+      old(holder[r]) is some(b) =>
+        (holder[r] == none or (holder[r] is some(a) and a == b))
+    }
+  }
+
+  // 非空虚性: 誰かが資源を保持する状態に到達できる。
+  reachable SomeoneHolds { exists r: Res { holder[r] != none } }
+}

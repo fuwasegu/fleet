@@ -1,0 +1,66 @@
+// A2A: outbox の有向メッセージ配信(fleet_message)を検証する。
+// 実装(A2AChannelHub): 宛先が idle かつ session 生存のときだけ term.send で注入し、
+//   delivered-<card>.json(配信カーソル)で二度配信しない。配信は「状態変化(onStateChange)」と
+//   「outbox 追記(watcher)」で起動する = idle への遷移や送信に配信が結合している。
+//
+// 検証したい性質:
+//   安全性 AtMostOnce  … 同じメッセージを二度注入しない(delivered カーソル)。
+//   活性   Eventually  … agent が起動して手が空けば、送られたメッセージは必ず配信される。
+// ASSUME-1(表現のみ): 宛先 X 1枚・メッセージ1通で配信の相互作用は現れる。
+// ASSUME-2(結合): 配信は idle 遷移(x_go_idle)と送信(send)に結合(実装の onScan/watcher 起動に対応)。
+//   → 別個の「配信アクション」の取りこぼしではなく、遷移そのものが配信する。
+spec A2ADelivery "design: outbox delivery at-most-once + eventual" {
+  state {
+    pending:   Bool,       // 未配信メッセージが存在(outbox にあり未注入)
+    delivered: Bool,       // 配信済み(delivered カーソル相当)
+    injects:   0..2,       // 端末への注入回数(at-most-once の観測用)
+    x_idle:    Bool,       // 宛先 X の agent が idle(手が空いている)
+    x_session: Bool        // 宛先 X の端末セッションが生存
+  }
+  init {
+    pending   = false
+    delivered = false
+    injects   = 0
+    x_idle    = false
+    x_session = false
+  }
+
+  // 宛先の端末が起動する(agent が走り出す)。実運用では起動を期待するので fair。
+  fair action x_open() { requires not x_session  x_session = true }
+
+  // idle は session 生存が前提(未起動の agent は idle にならない)。
+  // idle へ遷移する瞬間に、保留メッセージがあれば配信(onStateChange → process → deliver)。
+  fair action x_go_idle() {
+    requires not x_idle
+    requires x_session
+    x_idle = true
+    if pending and not delivered {
+      injects = injects + 1
+      delivered = true
+      pending = false
+    }
+  }
+  action x_go_busy() { requires x_idle  x_idle = false }
+
+  // 送信(outbox 追記)。既に idle+session なら watcher 経由で即配信、さもなくば保留。
+  action send() {
+    requires not pending
+    requires not delivered
+    if x_idle and x_session {
+      injects = injects + 1
+      delivered = true
+    } else {
+      pending = true
+    }
+  }
+
+  // 安全性: 二重注入しない。
+  invariant AtMostOnce { injects <= 1 }
+  // 帰納法補助(MODEL): 注入回数は delivered フラグに一致する。
+  invariant MODEL_InjectsMatchDelivered {
+    (delivered => injects == 1) and (not delivered => injects == 0)
+  }
+
+  // 活性: 送られたメッセージはいつか必ず配信される(agent 起動と idle は fair)。
+  leadsTo EventuallyDelivered { pending ~> delivered }
+}

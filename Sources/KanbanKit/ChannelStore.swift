@@ -379,6 +379,24 @@ public enum ChannelStore {
         try? FileManager.default.removeItem(at: dir(for: id))
     }
 
+    /// src のメモリを dst へ移してから src dir を削除する。src チャンネルのロック下で行い、
+    /// 稼働中 bridge の追記(src ロックを取り書込直前に binding を再確認する)と直列化する。
+    /// 呼び出し側は先に binding を dst へ更新しておくこと(bridge が再確認で dst を見て書けるように)。
+    /// FSL: a2a_channel_race_fixed.fsl で NoLostWrite を証明済み。
+    public static func relocateAndRemove(from src: UUID, into dst: UUID) {
+        withChannelLock(dir(for: src)) {
+            mergeMemory(from: src, into: dst)     // mergeMemory は内側で dst ロックを取る(src→dst 順で一貫)
+            try? FileManager.default.removeItem(at: dir(for: src))
+        }
+    }
+
+    /// チャンネル dir をロック下で削除する(解散時)。呼び出し側は先に binding を無所属へ。
+    public static func removeDirLocked(for id: UUID) {
+        withChannelLock(dir(for: id)) {
+            try? FileManager.default.removeItem(at: dir(for: id))
+        }
+    }
+
     /// カードの MCP 設定ファイル(mcp-<cardID>.json)を削除する(離脱時のゴミ掃除, LOW-2)。
     public static func removeMCPConfig(cardID: UUID, channelID: UUID) {
         let url = dir(for: channelID).appendingPathComponent("mcp-\(cardID.uuidString).json")

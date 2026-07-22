@@ -73,6 +73,28 @@ func withChannelLock<T>(_ channelDir: URL, _ body: () -> T) -> T {
     return body()
 }
 
+/// 書き込み専用: チャンネルを解決してロックし、ロック取得後に binding を読み直して
+/// 「まだ同じチャンネルか」を確認してから body を実行する。変わっていたら手放して再解決する。
+/// app 側が合流/解除の binding 更新→dir 削除を src ロック下で行うため、これで
+/// 「解決した直後に app が合流/削除して、消えたチャンネルへ書いて失う」TOCTOU を防ぐ
+/// (FSL: a2a_channel_race_fixed.fsl で NoLostWrite を証明済み)。
+func withResolvedChannelLocked(_ body: (URL) -> Void) {
+    for _ in 0..<3 {
+        guard let dir = currentChannelDir() else { return }   // 無所属なら書かない
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let lockURL = dir.appendingPathComponent(".lock")
+        let fd = lockURL.path.withCString { open($0, O_WRONLY | O_CREAT, 0o644) }
+        if fd >= 0 { flock(fd, LOCK_EX) }
+        let now = currentChannelDir()                          // ロック下で再確認
+        if let now, now.path == dir.path {
+            body(dir)
+            if fd >= 0 { flock(fd, LOCK_UN); close(fd) }
+            return
+        }
+        if fd >= 0 { flock(fd, LOCK_UN); close(fd) }           // 変わった → 再解決
+    }
+}
+
 // MARK: - Memory store (memory.jsonl と同形式)
 
 func readEntries(_ channelDir: URL) -> [[String: Any]] {
@@ -85,8 +107,7 @@ func readEntries(_ channelDir: URL) -> [[String: Any]] {
     }
 }
 
-func appendEntry(_ channelDir: URL, _ text: String, kind: String?, refs: [String]?) {
-    let memoryURL = channelDir.appendingPathComponent("memory.jsonl")
+func appendEntry(_ text: String, kind: String?, refs: [String]?) {
     let iso = ISO8601DateFormatter().string(from: Date())
     var entry: [String: Any] = [
         "id": UUID().uuidString,
@@ -100,8 +121,9 @@ func appendEntry(_ channelDir: URL, _ text: String, kind: String?, refs: [String
     guard let d = try? JSONSerialization.data(withJSONObject: entry),
           let s = String(data: d, encoding: .utf8) else { return }
     let line = Data((s + "\n").utf8)
-    withChannelLock(channelDir) {
-        // ロック下 + O_APPEND: 大きな書込が複数 write に分割されても他書込と交錯しない
+    // ロック下で binding を再解決してから追記(合流/解除との TOCTOU 回避)。
+    withResolvedChannelLocked { channelDir in
+        let memoryURL = channelDir.appendingPathComponent("memory.jsonl")
         let fd = memoryURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
         guard fd >= 0 else { return }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -142,18 +164,18 @@ func resolvePeerID(_ name: String, in channelDir: URL) -> String? {
 }
 
 /// 有向メッセージを outbox.jsonl へ追記する(Fleet 本体の watcher が配信)。
-func appendOutbox(_ channelDir: URL, to: String, kind: String, text: String) {
-    let outboxURL = channelDir.appendingPathComponent("outbox.jsonl")
+func appendOutbox(to: String, kind: String, text: String) {
     let iso = ISO8601DateFormatter().string(from: Date())
-    var entry: [String: Any] = [
-        "id": UUID().uuidString, "fromID": cardID, "from": authorName(),
-        "to": to, "kind": kind, "text": text, "createdAt": iso
-    ]
-    if let toID = resolvePeerID(to, in: channelDir) { entry["toID"] = toID }
-    guard let d = try? JSONSerialization.data(withJSONObject: entry),
-          let s = String(data: d, encoding: .utf8) else { return }
-    let line = Data((s + "\n").utf8)
-    withChannelLock(channelDir) {
+    withResolvedChannelLocked { channelDir in
+        let outboxURL = channelDir.appendingPathComponent("outbox.jsonl")
+        var entry: [String: Any] = [
+            "id": UUID().uuidString, "fromID": cardID, "from": authorName(),
+            "to": to, "kind": kind, "text": text, "createdAt": iso
+        ]
+        if let toID = resolvePeerID(to, in: channelDir) { entry["toID"] = toID }
+        guard let d = try? JSONSerialization.data(withJSONObject: entry),
+              let s = String(data: d, encoding: .utf8) else { return }
+        let line = Data((s + "\n").utf8)
         let fd = outboxURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
         guard fd >= 0 else { return }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -171,8 +193,7 @@ func writeStatus(_ channelDir: URL, task: String) {
 
 // MARK: - 盤面操作 intent(board-intents.jsonl)+ スナップショット(board.json)
 
-func appendBoardIntent(_ channelDir: URL, _ entry: [String: Any]) {
-    let url = channelDir.appendingPathComponent("board-intents.jsonl")
+func appendBoardIntent(_ entry: [String: Any]) {
     var e = entry
     e["id"] = UUID().uuidString
     e["fromID"] = cardID
@@ -180,7 +201,8 @@ func appendBoardIntent(_ channelDir: URL, _ entry: [String: Any]) {
     guard let d = try? JSONSerialization.data(withJSONObject: e),
           let s = String(data: d, encoding: .utf8) else { return }
     let line = Data((s + "\n").utf8)
-    withChannelLock(channelDir) {
+    withResolvedChannelLocked { channelDir in
+        let url = channelDir.appendingPathComponent("board-intents.jsonl")
         let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
         guard fd >= 0 else { return }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -385,7 +407,7 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         }
         let kind = (arguments["kind"] as? String)?.lowercased()
         let refs = arguments["refs"] as? [String]
-        appendEntry(channelDir, text, kind: kind, refs: refs)
+        appendEntry(text, kind: kind, refs: refs)
         sendResult(id, textContent("Saved to shared memory."))
 
     case "fleet_peers":
@@ -419,7 +441,7 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             sendResult(id, textContent("Message too large (\(text.utf8.count) bytes; max \(maxRememberBytes)).", isError: true)); return
         }
         let kind = name == "fleet_handoff" ? "handoff" : "message"
-        appendOutbox(channelDir, to: to, kind: kind, text: text)
+        appendOutbox(to: to, kind: kind, text: text)
         let known = resolvePeerID(to, in: channelDir) != nil
         let note = known ? "" : " (note: no peer named \"\(to)\" is currently in this channel; it will be delivered if they join)"
         sendResult(id, textContent("Sent to \(to). It will be pushed into their session when they are ready.\(note)"))
@@ -501,7 +523,7 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         var intent: [String: Any] = ["kind": "create_card", "title": title]
         if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
         if let dir = arguments["dir"] as? String, !dir.isEmpty { intent["dir"] = dir }
-        appendBoardIntent(channelDir, intent)
+        appendBoardIntent(intent)
         sendResult(id, textContent("Requested new card \"\(title)\". It will appear on the board and join this channel shortly (check fleet_board)."))
 
     case "fleet_move_card":
@@ -509,7 +531,7 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
               let column = (arguments["column"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !column.isEmpty else {
             sendResult(id, textContent("card and column are required", isError: true)); return
         }
-        appendBoardIntent(channelDir, ["kind": "move_card", "card": card, "column": column])
+        appendBoardIntent(["kind": "move_card", "card": card, "column": column])
         sendResult(id, textContent("Requested move of \"\(card)\" to \"\(column)\" (check fleet_board)."))
 
     default:

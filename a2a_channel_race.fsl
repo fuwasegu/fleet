@@ -1,0 +1,67 @@
+// A2A: 稼働中 bridge の書き込みと、盤面側のチャンネル合流/解除の競合を検証する。
+// 実装:
+//   - bridge(main.swift): tool 呼び出しの先頭で binding.json を読み現在チャンネルを解決
+//     (currentChannelDir)、そのあと channel dir を flock して追記(appendEntry)。
+//     → 「解決」と「追記」は別ステップで、その間に app が動ける。
+//   - app(BoardStore): connectCards の合流ケースは mergeMemory(dst=ca を flock)後に
+//     src(cb) dir を removeDir する。src(cb) の flock は取らない。
+//     disconnectCard の解散も src dir を removeDir する。
+//   → bridge が「解決した書込先」= 旧チャンネル(cb)は、app 側が別ロックで消しうる。
+//
+// 検証したい安全性: bridge の追記が、消えた/所属外のチャンネルに落ちて失われないこと。
+// ASSUME-1(表現のみ): チャンネル2個(A,B)、in-flight 書込を持つカード X 1枚で競合は現れる。
+spec A2AChannelRace "design: bridge write vs merge/disconnect (TOCTOU)" {
+  enum Chan { A, B }
+
+  state {
+    x_chan:    Option<Chan>,       // X の真の所属チャンネル
+    x_binding: Option<Chan>,       // 永続 binding(bridge が読む値)
+    alive:     Map<Chan, Bool>,    // チャンネル dir が存在するか
+    resolved:  Option<Chan>,       // bridge が解決した書込先(read 後・write 前の in-flight)
+    lost:      Bool                // 追記が消えた/所属外へ落ちた(禁止状態)
+  }
+  init {
+    x_chan    = some(B)
+    x_binding = some(B)
+    alive[A]  = true
+    alive[B]  = true
+    resolved  = none
+    lost      = false
+  }
+
+  // bridge: 現在の binding を読んで書込先を確定する(tool 先頭の readBinding 相当)。
+  action bridge_resolve() {
+    requires resolved == none
+    requires x_binding is some(c)
+    resolved = some(c)
+  }
+
+  // bridge: 確定先チャンネルへ追記(appendEntry 相当)。
+  // 先が生存し、かつ X の現所属と一致していれば読める。さもなくば失われる。
+  action bridge_commit() {
+    requires resolved is some(c)
+    resolved = none
+    if not (alive[c] and (x_chan is some(xc) and xc == c)) {
+      lost = true
+    }
+  }
+
+  // app: B を A へ合流(connectCards の (ca?,cb?) ケース)。所属/ binding を A へ、B dir 削除。
+  action app_merge() {
+    requires x_chan is some(c) and c == B
+    x_chan    = some(A)
+    x_binding = some(A)
+    alive[B]  = false
+  }
+
+  // app: X をチャンネルから解除して解散(disconnectCard)。所属/ binding を無所属、dir 削除。
+  action app_disconnect() {
+    requires x_chan is some(c)
+    x_chan    = none
+    x_binding = none
+    alive[c]  = false
+  }
+
+  // 本命の安全性: どんな順序でも bridge の追記は失われない。
+  invariant NoLostWrite { not lost }
+}

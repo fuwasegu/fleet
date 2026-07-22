@@ -1,0 +1,71 @@
+// a2a_channel_race.fsl の TOCTOU を、修正案でモデル検証する。
+// 修正: bridge は「追記の直前に(チャンネルロック下で)binding を読み直して」書込先を確定する。
+//   app 側は合流/解除の binding 更新→dir 削除を src チャンネルのロック下で行う。
+//   → ロックで直列化されるため、bridge は追記時点で常に「現在のチャンネル」を見て書く。
+// これを FSL では「bridge_commit が binding を読み直して書く1原子ステップ」として表す
+// (ロックにより app の合流/解除と相互排他 = 原子とみなせる)。binding が none(解除済み)なら
+// 書き先が無いので破棄する(送信側の責務で、失われた書き込みではない)。
+spec A2AChannelRaceFixed "design: bridge re-resolves binding under lock (fix)" {
+  enum Chan { A, B }
+
+  state {
+    x_chan:    Option<Chan>,
+    x_binding: Option<Chan>,
+    alive:     Map<Chan, Bool>,
+    resolved:  Option<Chan>,
+    lost:      Bool
+  }
+  init {
+    x_chan    = some(B)
+    x_binding = some(B)
+    alive[A]  = true
+    alive[B]  = true
+    resolved  = none
+    lost      = false
+  }
+
+  action bridge_resolve() {
+    requires resolved == none
+    requires x_binding is some(c)
+    resolved = some(c)
+  }
+
+  // 修正版: 確定していた resolved は使わず、ロック下で binding を読み直して書く。
+  action bridge_commit() {
+    requires resolved != none
+    resolved = none
+    if x_binding is some(c) {
+      // binding が指す現在のチャンネルへ書く。ロックで app と直列化されるため生存かつ所属一致。
+      if not (alive[c] and (x_chan is some(xc) and xc == c)) { lost = true }
+    }
+    // x_binding == none: 解除済みで書き先なし → 破棄(lost ではない)
+  }
+
+  action app_merge() {
+    requires x_chan is some(c) and c == B
+    requires alive[A]                    // 合流先 A は生存しているチャンネル
+    x_chan    = some(A)
+    x_binding = some(A)
+    alive[B]  = false
+  }
+
+  action app_disconnect() {
+    requires x_chan is some(c)
+    x_chan    = none
+    x_binding = none
+    alive[c]  = false
+  }
+
+  invariant NoLostWrite { not lost }
+  // 修正が効く鍵(帰納法の芯):
+  //  (1) binding は常に真の所属と一致する(app が原子的に両方更新)。
+  invariant BindingMatchesChan {
+    (x_binding == none and x_chan == none)
+      or (x_binding is some(b) and x_chan is some(c) and b == c)
+  }
+  //  (2) カードの現在のチャンネルは常に生存している。
+  invariant ChanAlive { x_chan is some(c) => alive[c] }
+  //  → (1)+(2) から「binding は生存かつ所属一致のチャンネルを指す」= commit は決して失われない。
+  // 非空虚性: resolve→merge→commit の順序(元バグの筋)に到達しても lost にならない。
+  reachable MergedAfterResolve { x_chan is some(c) and c == A and resolved == none }
+}

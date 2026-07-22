@@ -197,18 +197,18 @@ public struct BoardStore {
         case (nil, let cb?):
             a.channel = cb; channel = cb
         case (let ca?, let cb?):
-            // cb を ca へ合流。順序が重要: (1)メモリを ca へ移す → (2)所属/binding を ca へ
-            // → (3)最後に cb dir を削除。稼働中 bridge は binding 経由で解決するので、
-            //    binding 更新後に dir を消せば書込先が失われない(HIGH-1 回避)。
+            // cb を ca へ合流。順序が重要(FSL a2a_channel_race_fixed 準拠):
+            //  (1)所属を ca へ → (2)binding を ca へ(syncChannel)→ (3)src ロック下で
+            //     メモリ移動+dir 削除。稼働中 bridge は書込直前に binding を読み直すので、
+            //     binding が ca に変わった後なら消えた cb へ書いて失うことがない(TOCTOU 回避)。
             let cbID = cb.id
             let moved = cb.cards
-            ChannelStore.mergeMemory(from: cbID, into: ca.id)
             for c in moved { c.channel = ca; ChannelStore.removeMCPConfig(cardID: c.id, channelID: cbID) }
             channel = ca
             context.delete(cb)
             try context.save()
-            syncChannel(ca)                 // 移動カードの binding を ca へ更新
-            ChannelStore.removeDir(for: cbID)
+            syncChannel(ca)                                      // (2) binding→ca(削除より前)
+            ChannelStore.relocateAndRemove(from: cbID, into: ca.id)  // (3) src ロック下で移動+削除
             return channel
         }
         try context.save()
@@ -228,13 +228,13 @@ public struct BoardStore {
         ChannelStore.removeMCPConfig(cardID: leavingID, channelID: chID)
         if ch.cards.count < 2 {
             for c in ch.cards {
-                ChannelStore.writeBinding(cardID: c.id, channel: nil, name: c.title)
+                ChannelStore.writeBinding(cardID: c.id, channel: nil, name: c.title)  // binding→無所属(削除より前)
                 ChannelStore.removeMCPConfig(cardID: c.id, channelID: chID)
                 c.channel = nil
             }
             context.delete(ch)
             try context.save()
-            ChannelStore.removeDir(for: chID)
+            ChannelStore.removeDirLocked(for: chID)   // src ロック下で削除(稼働中 bridge と直列化)
         } else {
             syncChannel(ch)
         }
