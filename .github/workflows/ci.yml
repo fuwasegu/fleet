@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$latest" ] && sudo xcode-select -s "$latest"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Unit tests (KanbanKit) + build
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Fleet.xcodeproj -scheme Fleet \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: fleet-bridge MCP protocol test
+        run: bash scripts/test-bridge.sh build/dd/Build/Products/Debug/fleet-bridge
