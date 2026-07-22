@@ -380,16 +380,15 @@ struct BoardStoreTests {
     }
 
     /// peers.json は内容が同じなら書き直さない(watcher の自己トリガー防止)。
+    /// 返り値(書いたか)で判定する(mtime 精度に依存しない決定的テスト)。
     @Test func writePeersSkipsWhenUnchanged() throws {
         let chID = UUID()
         defer { ChannelStore.removeDir(for: chID) }
         let peers = [PeerInfo(id: "1", name: "a", status: "idle")]
-        ChannelStore.writePeers(peers, for: chID)
-        let url = ChannelStore.dir(for: chID).appending(path: "peers.json")
-        let mtime1 = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
-        ChannelStore.writePeers(peers, for: chID)   // 同内容 → 書かない
-        let mtime2 = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
-        #expect(mtime1 == mtime2)
+        #expect(ChannelStore.writePeers(peers, for: chID) == true)    // 初回は書く
+        #expect(ChannelStore.writePeers(peers, for: chID) == false)   // 同内容 → スキップ
+        let changed = [PeerInfo(id: "1", name: "a", status: "working")]
+        #expect(ChannelStore.writePeers(changed, for: chID) == true)  // 変化 → 書く
     }
 
     // MARK: helpers

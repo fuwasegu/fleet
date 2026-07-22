@@ -198,12 +198,15 @@ public enum ChannelStore {
 
     /// メンバー情報を peers.json に書き出す(fleet-bridge の fleet_peers 用)。原子書込。
     /// 内容が変わらないときは書かない(常駐 watcher の自己トリガーによる無限ループ防止)。
-    public static func writePeers(_ peers: [PeerInfo], for id: UUID) {
+    /// 実際に書き込んだら true、内容不変でスキップしたら false を返す。
+    @discardableResult
+    public static func writePeers(_ peers: [PeerInfo], for id: UUID) -> Bool {
         ensureDir(id)
-        guard let d = try? JSONEncoder().encode(peers) else { return }
+        guard let d = try? JSONEncoder().encode(peers) else { return false }
         let url = dir(for: id).appending(path: "peers.json")
-        if let existing = try? Data(contentsOf: url), existing == d { return }
+        if let existing = try? Data(contentsOf: url), existing == d { return false }
         try? d.write(to: url, options: .atomic)
+        return true
     }
 
     // MARK: - Outbox(有向メッセージ)
