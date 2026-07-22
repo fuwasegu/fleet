@@ -251,6 +251,56 @@ public struct BoardStore {
         }
     }
 
+    /// Agent の盤面操作 intent(board-intents.jsonl)を適用する。
+    /// create_card / move_card のみ(破壊操作なし)。move はチャンネル所属カードに限定。
+    /// 適用済み id は記録し、成否に関わらず再適用しない(リトライ暴走防止)。
+    public func applyBoardIntents(for channelID: UUID) {
+        let intents = ChannelStore.boardIntents(for: channelID)
+        guard !intents.isEmpty else { return }
+        var applied = ChannelStore.appliedIntentIDs(for: channelID)
+        var didApply = false
+        for intent in intents where !applied.contains(intent.id) {
+            applied.insert(intent.id); didApply = true
+            guard let ch = channel(withID: channelID) else { continue }
+            let cols = (try? columns()) ?? []
+            switch intent.kind {
+            case "create_card":
+                guard let title = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { break }
+                guard let col = cols.first(where: { $0.name == intent.column }) ?? cols.first else { break }
+                let dir = (intent.dir?.isEmpty == false) ? intent.dir : nil
+                if let card = try? addCard(title: title, to: col, workingDirPath: dir) {
+                    // 作成元と同じチャンネルへ参加させて文脈を共有(委譲の要)。
+                    let anchor = ch.cards.first { $0.id.uuidString == intent.fromID } ?? ch.cards.first
+                    if let anchor { try? connectCards(card, anchor) }
+                }
+            case "move_card":
+                guard let ref = intent.card, let colName = intent.column,
+                      let col = cols.first(where: { $0.name == colName }) else { break }
+                if let target = ch.cards.first(where: { $0.id.uuidString == ref || $0.title == ref }) {
+                    try? moveCard(target, to: col, at: col.cards.count)
+                }
+            default: break
+            }
+        }
+        if didApply { ChannelStore.writeAppliedIntentIDs(applied, for: channelID) }
+    }
+
+    /// board.json スナップショット(fleet_board 用)を書く。差分時のみ書き込む。
+    public func writeBoardSnapshot(for channelID: UUID) {
+        guard let ch = channel(withID: channelID) else { return }
+        let cols = ((try? columns()) ?? []).map { BoardSnapshot.Col(name: $0.name) }
+        let sorted = ch.cards.sorted { a, b in
+            let ca = a.column?.order ?? 0, cb = b.column?.order ?? 0
+            return ca != cb ? ca < cb : a.order < b.order
+        }
+        let cards = sorted.map { c in
+            BoardSnapshot.CardRef(id: c.id.uuidString, title: c.title,
+                                  column: c.column?.name ?? "",
+                                  status: c.isDone ? "done" : c.agentState.rawValue)
+        }
+        ChannelStore.writeBoardSnapshot(BoardSnapshot(columns: cols, cards: cards), for: channelID)
+    }
+
     private static func peerInfo(for card: Card, channelID: UUID) -> PeerInfo {
         let status = card.isDone ? "done" : card.agentState.rawValue
         return PeerInfo(id: card.id.uuidString,

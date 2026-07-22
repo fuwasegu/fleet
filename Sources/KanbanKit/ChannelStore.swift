@@ -2,15 +2,27 @@ import Foundation
 
 /// チャンネル共有メモリの1エントリ。fleet-bridge と同じ JSON 形式。
 /// author は表示名、authorID は安定な識別子(カード UUID)。改名しても authorID は不変。
+/// kind/refs は構造化メモリ用(後方互換: 旧エントリは nil → note 扱い)。
 public struct ChannelEntry: Codable, Identifiable, Sendable, Hashable {
     public let id: String
     public let author: String
     public let authorID: String?   // 後方互換: 旧エントリには無い
     public let text: String
     public let createdAt: Date
+    public let kind: String?       // decision | blocker | artifact | question | note
+    public let refs: [String]?     // 関連するファイルパス / PR / カード id など
 
-    public init(id: String = UUID().uuidString, author: String, authorID: String? = nil, text: String, createdAt: Date = Date()) {
-        self.id = id; self.author = author; self.authorID = authorID; self.text = text; self.createdAt = createdAt
+    public init(id: String = UUID().uuidString, author: String, authorID: String? = nil,
+                text: String, createdAt: Date = Date(), kind: String? = nil, refs: [String]? = nil) {
+        self.id = id; self.author = author; self.authorID = authorID
+        self.text = text; self.createdAt = createdAt; self.kind = kind; self.refs = refs
+    }
+
+    /// 有効な kind(nil や不明値は note に丸める)。
+    public var effectiveKind: String {
+        let allowed: Set<String> = ["decision", "blocker", "artifact", "question", "note"]
+        guard let k = kind?.lowercased(), allowed.contains(k) else { return "note" }
+        return k
     }
 }
 
@@ -50,6 +62,43 @@ public struct OutboxMessage: Codable, Identifiable, Sendable {
         self.id = id; self.fromID = fromID; self.from = from; self.to = to
         self.toID = toID; self.kind = kind; self.text = text; self.createdAt = createdAt
     }
+}
+
+/// Agent が盤面を操作する意図(board-intents.jsonl)。Fleet 本体の watcher が
+/// BoardStore で適用する(bridge は SwiftData に触れないためファイル IPC)。
+public struct BoardIntent: Codable, Identifiable, Sendable {
+    public let id: String
+    public let kind: String        // "create_card" | "move_card"
+    public let fromID: String      // 発行元カード id
+    public let title: String?      // create_card: 新カード名
+    public let card: String?       // move_card: 対象カード(id or title)
+    public let column: String?     // 対象列名
+    public let dir: String?        // create_card: 作業ディレクトリ
+    public let createdAt: Date
+
+    public init(id: String = UUID().uuidString, kind: String, fromID: String,
+                title: String? = nil, card: String? = nil, column: String? = nil,
+                dir: String? = nil, createdAt: Date = Date()) {
+        self.id = id; self.kind = kind; self.fromID = fromID; self.title = title
+        self.card = card; self.column = column; self.dir = dir; self.createdAt = createdAt
+    }
+}
+
+/// 盤面スナップショット(board.json)。fleet_board が読む。Agent が盤面を観測できるように。
+public struct BoardSnapshot: Codable, Sendable, Equatable {
+    public struct Col: Codable, Sendable, Equatable {
+        public var name: String
+        public init(name: String) { self.name = name }
+    }
+    public struct CardRef: Codable, Sendable, Equatable {
+        public var id: String; public var title: String; public var column: String; public var status: String
+        public init(id: String, title: String, column: String, status: String) {
+            self.id = id; self.title = title; self.column = column; self.status = status
+        }
+    }
+    public var columns: [Col]
+    public var cards: [CardRef]     // このチャンネルに属すカードのみ
+    public init(columns: [Col], cards: [CardRef]) { self.columns = columns; self.cards = cards }
 }
 
 /// カードとチャンネルの束縛。fleet-bridge は起動時にチャンネルdirを焼き込まず、
@@ -138,9 +187,10 @@ public enum ChannelStore {
 
     // MARK: - 追記(remember)
 
-    public static func append(_ text: String, author: String, authorID: String? = nil, to id: UUID) {
+    public static func append(_ text: String, author: String, authorID: String? = nil,
+                              kind: String? = nil, refs: [String]? = nil, to id: UUID) {
         ensureDir(id)
-        let entry = ChannelEntry(author: author, authorID: authorID, text: text)
+        let entry = ChannelEntry(author: author, authorID: authorID, text: text, kind: kind, refs: refs)
         guard let data = try? encoder().encode(entry),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
@@ -253,6 +303,42 @@ public enum ChannelStore {
         if let d = try? JSONEncoder().encode(Array(ids)) {
             try? d.write(to: deliveredFile(cardID: cardID, channelID: channelID), options: .atomic)
         }
+    }
+
+    // MARK: - 盤面操作 intent(Agent → Fleet)
+
+    public static func boardIntents(for id: UUID) -> [BoardIntent] {
+        let url = dir(for: id).appending(path: "board-intents.jsonl")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let dec = decoder()
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let d = line.data(using: .utf8) else { return nil }
+            return try? dec.decode(BoardIntent.self, from: d)
+        }
+    }
+    public static func appliedIntentIDs(for id: UUID) -> Set<String> {
+        let url = dir(for: id).appending(path: "board-applied.json")
+        guard let d = try? Data(contentsOf: url),
+              let arr = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+        return Set(arr)
+    }
+    public static func writeAppliedIntentIDs(_ ids: Set<String>, for id: UUID) {
+        ensureDir(id)
+        if let d = try? JSONEncoder().encode(Array(ids)) {
+            try? d.write(to: dir(for: id).appending(path: "board-applied.json"), options: .atomic)
+        }
+    }
+    /// board.json を書く。内容不変なら書かない(watcher の自己トリガー防止)。
+    @discardableResult
+    public static func writeBoardSnapshot(_ snapshot: BoardSnapshot, for id: UUID) -> Bool {
+        ensureDir(id)
+        guard let d = try? JSONEncoder().encode(snapshot) else { return false }
+        let url = dir(for: id).appending(path: "board.json")
+        if let existing = try? Data(contentsOf: url),
+           let old = try? JSONDecoder().decode(BoardSnapshot.self, from: existing),
+           old == snapshot { return false }
+        try? d.write(to: url, options: .atomic)
+        return true
     }
 
     // MARK: - Agent 自己申告ステータス(fleet_status)

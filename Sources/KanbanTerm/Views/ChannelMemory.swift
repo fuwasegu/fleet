@@ -39,6 +39,7 @@ struct ChannelMemorySheet: View {
                                     Text(e.author)
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.green)
+                                    KindBadge(kind: e.effectiveKind)
                                     Text(e.createdAt, format: .relative(presentation: .named))
                                         .font(.caption2).foregroundStyle(.secondary)
                                     Spacer()
@@ -49,6 +50,13 @@ struct ChannelMemorySheet: View {
                                 }
                                 Text(e.text).font(.callout).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                if let refs = e.refs, !refs.isEmpty {
+                                    Text(refs.joined(separator: "  ·  "))
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                        .lineLimit(2)
+                                }
                             }
                             .padding(.vertical, 10).padding(.horizontal, 16)
                             Divider()
@@ -77,5 +85,26 @@ struct ChannelMemorySheet: View {
         src.setCancelHandler { close(fd) }
         src.resume()
         watcher = src
+    }
+}
+
+/// メモリの種別バッジ(decision/blocker/artifact/question/note)。
+private struct KindBadge: View {
+    let kind: String
+    private var color: Color {
+        switch kind {
+        case "decision": return .blue
+        case "blocker":  return .red
+        case "artifact": return .purple
+        case "question": return .orange
+        default:          return .secondary
+        }
+    }
+    var body: some View {
+        Text(kind)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(color.opacity(0.16), in: Capsule())
     }
 }

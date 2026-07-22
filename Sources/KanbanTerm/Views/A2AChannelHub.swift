@@ -65,10 +65,10 @@ final class A2AChannelHub {
     private func process(_ channelID: UUID) {
         guard let context else { return }
         let store = BoardStore(context: context)
-        // 1) peers.json を現在の状態 + Agent 申告 task に同期(writePeers は差分時のみ書く)
-        if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }
-        // 2) outbox の未配信メッセージを配信
-        deliverOutbox(channelID, store: store)
+        store.applyBoardIntents(for: channelID)                 // Agent の盤面操作(create/move)を適用
+        if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期
+        store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット
+        deliverOutbox(channelID, store: store)                  // outbox の push 配信
     }
 
     private func deliverOutbox(_ channelID: UUID, store: BoardStore) {

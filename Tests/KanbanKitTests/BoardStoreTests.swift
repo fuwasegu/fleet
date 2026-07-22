@@ -391,7 +391,81 @@ struct BoardStoreTests {
         #expect(ChannelStore.writePeers(changed, for: chID) == true)  // 変化 → 書く
     }
 
+    /// 構造化メモリ: kind/refs が往復する。
+    @Test func structuredMemoryRoundTrip() throws {
+        let chID = UUID()
+        defer { ChannelStore.removeDir(for: chID) }
+        ChannelStore.append("chose SwiftData", author: "a", authorID: "aid",
+                            kind: "decision", refs: ["Models.swift"], to: chID)
+        let e = try #require(ChannelStore.entries(for: chID).first)
+        #expect(e.effectiveKind == "decision")
+        #expect(e.refs == ["Models.swift"])
+        // 不明 kind は note に丸める
+        ChannelStore.append("misc", author: "a", kind: "weird", to: chID)
+        #expect(ChannelStore.entries(for: chID).last?.effectiveKind == "note")
+    }
+
+    /// board intent(create_card)を適用すると、カードが作られチャンネルへ参加する。
+    @Test func applyCreateCardIntentJoinsChannel() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        _ = try store.addColumn(name: "Done")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        let intent = BoardIntent(kind: "create_card", fromID: a.id.uuidString, title: "spawned", column: "Todo")
+        writeIntent(intent, to: ch.id)
+        store.applyBoardIntents(for: ch.id)
+
+        let created = try #require(todo.cards.first { $0.title == "spawned" })
+        #expect(created.channel?.id == ch.id)          // 同じチャンネルへ参加
+        #expect(ch.cards.count == 3)
+        // 二度目の適用は冪等(重複作成しない)
+        store.applyBoardIntents(for: ch.id)
+        #expect(todo.cards.filter { $0.title == "spawned" }.count == 1)
+    }
+
+    /// board intent(move_card)はチャンネル所属カードを別列へ移す。
+    @Test func applyMoveCardIntent() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let done = try store.addColumn(name: "Done")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        writeIntent(BoardIntent(kind: "move_card", fromID: a.id.uuidString, card: "b", column: "Done"), to: ch.id)
+        store.applyBoardIntents(for: ch.id)
+        #expect(b.column?.name == "Done")
+    }
+
+    /// board.json スナップショットが列とチャンネルカードを反映する。
+    @Test func boardSnapshotReflectsChannel() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+        store.writeBoardSnapshot(for: ch.id)
+        let url = ChannelStore.dir(for: ch.id).appending(path: "board.json")
+        let snap = try JSONDecoder().decode(BoardSnapshot.self, from: Data(contentsOf: url))
+        #expect(snap.columns.map(\.name).contains("Todo"))
+        #expect(Set(snap.cards.map(\.title)) == Set(["a", "b"]))
+    }
+
     // MARK: helpers
+
+    private func writeIntent(_ intent: BoardIntent, to channelID: UUID) {
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        let line = (try? enc.encode(intent)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let url = ChannelStore.dir(for: channelID).appending(path: "board-intents.jsonl")
+        try? FileManager.default.createDirectory(at: ChannelStore.dir(for: channelID), withIntermediateDirectories: true)
+        try? (line + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
 
     private func readPeers(_ id: UUID) -> [PeerInfo]? {
         let url = ChannelStore.dir(for: id).appending(path: "peers.json")

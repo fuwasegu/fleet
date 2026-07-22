@@ -233,6 +233,28 @@ struct BoardView: View {
     }
 
     /// 同一チャンネル(共有メモリ)のカードをベジェ曲線で結ぶ(Miro/FigJam 風)。
+    /// カード矩形の、target 方向の辺との交点(少し外側)を返す。線をカード面から出さない。
+    private static func edgePoint(of rect: CGRect, toward target: CGPoint) -> CGPoint {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let dx = target.x - c.x, dy = target.y - c.y
+        if dx == 0 && dy == 0 { return c }
+        let tx = dx == 0 ? CGFloat.greatestFiniteMagnitude : (rect.width / 2) / abs(dx)
+        let ty = dy == 0 ? CGFloat.greatestFiniteMagnitude : (rect.height / 2) / abs(dy)
+        let t = min(tx, ty)
+        let len = max(1, (dx * dx + dy * dy).squareRoot())
+        let pad: CGFloat = 6   // 辺のわずか外側から始める
+        return CGPoint(x: c.x + dx * t + dx / len * pad, y: c.y + dy * t + dy / len * pad)
+    }
+
+    /// start→end に対しわずかに横へ膨らむ制御点(直線的すぎず、面も横切らない)。
+    private static func bowControl(from start: CGPoint, to end: CGPoint) -> CGPoint {
+        let mid = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+        let vx = end.x - start.x, vy = end.y - start.y
+        let n = max(1, (vx * vx + vy * vy).squareRoot())
+        let bow: CGFloat = 10
+        return CGPoint(x: mid.x + (-vy / n) * bow, y: mid.y + (vx / n) * bow)
+    }
+
     /// 各メンバーからチャンネルの重心へ緩やかな曲線を引き、重心にハブのドットを置く。
     @ViewBuilder private var channelLinksOverlay: some View {
         Canvas { ctx, _ in
@@ -244,11 +266,11 @@ struct BoardView: View {
                 let cy = frames.map(\.midY).reduce(0, +) / CGFloat(frames.count)
                 let hub = CGPoint(x: cx, y: cy)
                 for f in frames {
-                    let start = CGPoint(x: f.midX, y: f.midY)
+                    // カード中心ではなくハブに面した端から曲線を出す(カード面を横切らない)。
+                    let start = Self.edgePoint(of: f, toward: hub)
                     var path = Path()
                     path.move(to: start)
-                    let control = CGPoint(x: (start.x + hub.x) / 2, y: start.y)  // 横に膨らむ緩い曲線
-                    path.addQuadCurve(to: hub, control: control)
+                    path.addQuadCurve(to: hub, control: Self.bowControl(from: start, to: hub))
                     ctx.stroke(path, with: .color(color.opacity(0.55)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
                 ctx.fill(Path(ellipseIn: CGRect(x: hub.x - 5, y: hub.y - 5, width: 10, height: 10)),
@@ -264,10 +286,10 @@ struct BoardView: View {
            let loc = uiState.connectDragLocation,
            let f = uiState.cardFrames[id] {
             Canvas { ctx, _ in
-                let start = CGPoint(x: f.midX, y: f.midY)
+                let start = Self.edgePoint(of: f, toward: loc)
                 var path = Path()
                 path.move(to: start)
-                path.addQuadCurve(to: loc, control: CGPoint(x: (start.x + loc.x) / 2, y: start.y))
+                path.addQuadCurve(to: loc, control: Self.bowControl(from: start, to: loc))
                 ctx.stroke(path, with: .color(Color(hex: "7FD962")!.opacity(0.8)),
                            style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 5]))
                 ctx.fill(Path(ellipseIn: CGRect(x: loc.x - 5, y: loc.y - 5, width: 10, height: 10)),

@@ -85,16 +85,18 @@ func readEntries(_ channelDir: URL) -> [[String: Any]] {
     }
 }
 
-func appendEntry(_ channelDir: URL, _ text: String) {
+func appendEntry(_ channelDir: URL, _ text: String, kind: String?, refs: [String]?) {
     let memoryURL = channelDir.appendingPathComponent("memory.jsonl")
     let iso = ISO8601DateFormatter().string(from: Date())
-    let entry: [String: Any] = [
+    var entry: [String: Any] = [
         "id": UUID().uuidString,
         "author": authorName(),
         "authorID": cardID,
         "text": text,
         "createdAt": iso
     ]
+    if let kind, !kind.isEmpty { entry["kind"] = kind }
+    if let refs, !refs.isEmpty { entry["refs"] = refs }
     guard let d = try? JSONSerialization.data(withJSONObject: entry),
           let s = String(data: d, encoding: .utf8) else { return }
     let line = Data((s + "\n").utf8)
@@ -105,6 +107,20 @@ func appendEntry(_ channelDir: URL, _ text: String) {
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         try? h.write(contentsOf: line)
         try? h.close()
+    }
+}
+
+/// recall の未読カーソル(このカードが最後に見たエントリ id)。
+func readRecallCursor(_ channelDir: URL) -> String? {
+    let url = channelDir.appendingPathComponent("recall-cursor-\(cardID).json")
+    guard let d = try? Data(contentsOf: url),
+          let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+    return obj["lastSeen"] as? String
+}
+func writeRecallCursor(_ channelDir: URL, lastSeen: String) {
+    let url = channelDir.appendingPathComponent("recall-cursor-\(cardID).json")
+    if let d = try? JSONSerialization.data(withJSONObject: ["lastSeen": lastSeen]) {
+        try? d.write(to: url, options: .atomic)
     }
 }
 
@@ -153,26 +169,72 @@ func writeStatus(_ channelDir: URL, task: String) {
     if let d = try? JSONSerialization.data(withJSONObject: obj) { try? d.write(to: url, options: .atomic) }
 }
 
+// MARK: - 盤面操作 intent(board-intents.jsonl)+ スナップショット(board.json)
+
+func appendBoardIntent(_ channelDir: URL, _ entry: [String: Any]) {
+    let url = channelDir.appendingPathComponent("board-intents.jsonl")
+    var e = entry
+    e["id"] = UUID().uuidString
+    e["fromID"] = cardID
+    e["createdAt"] = ISO8601DateFormatter().string(from: Date())
+    guard let d = try? JSONSerialization.data(withJSONObject: e),
+          let s = String(data: d, encoding: .utf8) else { return }
+    let line = Data((s + "\n").utf8)
+    withChannelLock(channelDir) {
+        let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
+        guard fd >= 0 else { return }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try? h.write(contentsOf: line)
+        try? h.close()
+    }
+}
+
+func readBoardSnapshot(_ channelDir: URL) -> [String: Any]? {
+    let url = channelDir.appendingPathComponent("board.json")
+    guard let d = try? Data(contentsOf: url),
+          let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+    return obj
+}
+
+// MARK: - Advisory ロック(locks.json: resource -> {holderID,holderName,ts})
+
+func readLocks(_ channelDir: URL) -> [String: [String: Any]] {
+    let url = channelDir.appendingPathComponent("locks.json")
+    guard let d = try? Data(contentsOf: url),
+          let obj = try? JSONSerialization.jsonObject(with: d) as? [String: [String: Any]] else { return [:] }
+    return obj
+}
+func writeLocks(_ channelDir: URL, _ locks: [String: [String: Any]]) {
+    let url = channelDir.appendingPathComponent("locks.json")
+    if let d = try? JSONSerialization.data(withJSONObject: locks) { try? d.write(to: url, options: .atomic) }
+}
+
 // MARK: - Tools
 
 let toolDefs: [[String: Any]] = [
     [
         "name": "fleet_recall",
-        "description": "Read the shared context/memory for this channel — notes other agents (and you) have recorded. Call this before starting work, and again whenever you resume, to avoid duplicating effort or conflicting decisions.",
+        "description": "Read the shared context/memory for this channel — notes other agents (and you) have recorded. Call this before starting work, and again whenever you resume. Use unread:true to get only what changed since your last recall, and kind to focus (e.g. kind:\"blocker\" for open blockers, kind:\"decision\" for decisions).",
         "inputSchema": [
             "type": "object",
             "properties": [
                 "query": ["type": "string", "description": "Optional substring filter."],
+                "kind": ["type": "string", "description": "Optional: only entries of this kind (decision|blocker|artifact|question|note)."],
+                "unread": ["type": "boolean", "description": "If true, return only entries recorded since your last recall."],
                 "limit": ["type": "integer", "description": "Max entries to return (default 20)."]
             ]
         ]
     ],
     [
         "name": "fleet_remember",
-        "description": "Record a note into the shared channel memory so other agents can see it. Use for decisions, findings, conventions, and hand-off info.",
+        "description": "Record a note into the shared channel memory so other agents can see it. Tag it with kind so peers can filter: decision (a choice made), blocker (something stuck), artifact (a file/PR/output produced), question (needs an answer), note (default). Attach refs (file paths, PR URLs, card ids) it relates to.",
         "inputSchema": [
             "type": "object",
-            "properties": ["text": ["type": "string", "description": "The note to share (max 16 KB)."]],
+            "properties": [
+                "text": ["type": "string", "description": "The note to share (max 16 KB)."],
+                "kind": ["type": "string", "description": "decision | blocker | artifact | question | note (default note)."],
+                "refs": ["type": "array", "items": ["type": "string"], "description": "Related file paths / PR URLs / card ids."]
+            ],
             "required": ["text"]
         ]
     ],
@@ -213,6 +275,59 @@ let toolDefs: [[String: Any]] = [
             "properties": ["text": ["type": "string", "description": "Short current-activity line."]],
             "required": ["text"]
         ]
+    ],
+    [
+        "name": "fleet_claim",
+        "description": "Take an advisory lock on a resource (usually a file path) before editing it, so peer agents sharing this repo don't clobber each other. Fails if another agent already holds it — check fleet_locks / the error and coordinate. Release it with fleet_release when done. Advisory only: it coordinates, it does not enforce at the filesystem.",
+        "inputSchema": [
+            "type": "object",
+            "properties": ["resource": ["type": "string", "description": "What you're claiming, e.g. a file path."]],
+            "required": ["resource"]
+        ]
+    ],
+    [
+        "name": "fleet_release",
+        "description": "Release an advisory lock you took with fleet_claim.",
+        "inputSchema": [
+            "type": "object",
+            "properties": ["resource": ["type": "string", "description": "The resource to release."]],
+            "required": ["resource"]
+        ]
+    ],
+    [
+        "name": "fleet_locks",
+        "description": "List the advisory locks currently held in this channel and who holds each. Check before claiming or before editing a shared file.",
+        "inputSchema": ["type": "object", "properties": [:]]
+    ],
+    [
+        "name": "fleet_board",
+        "description": "See the Fleet kanban board: the columns and the cards in your channel with their live status. Use it to understand the work layout before creating or moving cards.",
+        "inputSchema": ["type": "object", "properties": [:]]
+    ],
+    [
+        "name": "fleet_create_card",
+        "description": "Create a new card (a subtask) on the Fleet board. The new card automatically joins your channel, so it shares this context and a peer (or you) can pick it up. Use it to decompose work and delegate. Optionally place it in a named column and give it a working directory.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "title": ["type": "string", "description": "The card/subtask title."],
+                "column": ["type": "string", "description": "Optional column name (defaults to the first column)."],
+                "dir": ["type": "string", "description": "Optional working directory for the card's terminal."]
+            ],
+            "required": ["title"]
+        ]
+    ],
+    [
+        "name": "fleet_move_card",
+        "description": "Move a card in your channel to another column (e.g. to 'Done' or 'Review'). Identify the card by its title or id (see fleet_board).",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "card": ["type": "string", "description": "Target card's title or id."],
+                "column": ["type": "string", "description": "Destination column name."]
+            ],
+            "required": ["card", "column"]
+        ]
     ]
 ]
 
@@ -228,20 +343,33 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
     switch name {
     case "fleet_recall":
         var entries = readEntries(channelDir)
+        // 未読のみ: 最後に見たエントリより後だけを返し、カーソルを最新へ進める。
+        let unreadOnly = (arguments["unread"] as? Bool) ?? false
+        if unreadOnly, let cursor = readRecallCursor(channelDir),
+           let idx = entries.firstIndex(where: { ($0["id"] as? String) == cursor }) {
+            entries = Array(entries.suffix(from: idx + 1))
+        }
         if let q = (arguments["query"] as? String)?.lowercased(), !q.isEmpty {
             entries = entries.filter { (($0["text"] as? String) ?? "").lowercased().contains(q) }
         }
+        if let kindFilter = (arguments["kind"] as? String)?.lowercased(), !kindFilter.isEmpty {
+            entries = entries.filter { (($0["kind"] as? String)?.lowercased() ?? "note") == kindFilter }
+        }
+        // カーソルは(フィルタ前の)ファイル全体の最新へ進める = 「前回見て以降」の意味
+        if let newest = readEntries(channelDir).last?["id"] as? String { writeRecallCursor(channelDir, lastSeen: newest) }
         let limit = (arguments["limit"] as? Int) ?? 20
         let recent = Array(entries.suffix(limit)).reversed()   // 新しい順
         if recent.isEmpty {
-            sendResult(id, textContent("(shared memory is empty)"))
+            sendResult(id, textContent(unreadOnly ? "(no new shared memory since last recall)" : "(shared memory is empty)"))
             return
         }
         let lines = recent.map { e -> String in
             let a = (e["author"] as? String) ?? "?"
             let t = (e["text"] as? String) ?? ""
             let ts = (e["createdAt"] as? String) ?? ""
-            return "- [\(a) · \(ts)] \(t)"
+            let k = (e["kind"] as? String).map { " (\($0))" } ?? ""
+            let r = (e["refs"] as? [String]).flatMap { $0.isEmpty ? nil : " {refs: \($0.joined(separator: ", "))}" } ?? ""
+            return "- [\(a) · \(ts)]\(k) \(t)\(r)"
         }
         sendResult(id, textContent("Shared memory for this channel:\n" + lines.joined(separator: "\n")))
 
@@ -255,7 +383,9 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             sendResult(id, textContent("Note too large (\(text.utf8.count) bytes; max \(maxRememberBytes)). Summarize or split it.", isError: true))
             return
         }
-        appendEntry(channelDir, text)
+        let kind = (arguments["kind"] as? String)?.lowercased()
+        let refs = arguments["refs"] as? [String]
+        appendEntry(channelDir, text, kind: kind, refs: refs)
         sendResult(id, textContent("Saved to shared memory."))
 
     case "fleet_peers":
@@ -301,6 +431,86 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         }
         writeStatus(channelDir, task: String(text.prefix(200)))
         sendResult(id, textContent("Status updated."))
+
+    case "fleet_claim":
+        guard let resource = (arguments["resource"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !resource.isEmpty else {
+            sendResult(id, textContent("resource is required", isError: true)); return
+        }
+        var conflict: String?
+        withChannelLock(channelDir) {
+            var locks = readLocks(channelDir)
+            if let held = locks[resource], (held["holderID"] as? String) != cardID {
+                conflict = (held["holderName"] as? String) ?? "another agent"
+                return
+            }
+            locks[resource] = ["holderID": cardID, "holderName": authorName(), "ts": ISO8601DateFormatter().string(from: Date())]
+            writeLocks(channelDir, locks)
+        }
+        if let who = conflict {
+            sendResult(id, textContent("Cannot claim \"\(resource)\": already held by \(who). Coordinate (fleet_message) or wait.", isError: true))
+        } else {
+            sendResult(id, textContent("Claimed \"\(resource)\". Release it with fleet_release when done."))
+        }
+
+    case "fleet_release":
+        guard let resource = (arguments["resource"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !resource.isEmpty else {
+            sendResult(id, textContent("resource is required", isError: true)); return
+        }
+        withChannelLock(channelDir) {
+            var locks = readLocks(channelDir)
+            if (locks[resource]?["holderID"] as? String) == cardID {
+                locks.removeValue(forKey: resource)
+                writeLocks(channelDir, locks)
+            }
+        }
+        sendResult(id, textContent("Released \"\(resource)\"."))
+
+    case "fleet_locks":
+        let locks = readLocks(channelDir)
+        if locks.isEmpty { sendResult(id, textContent("No advisory locks are held in this channel.")); return }
+        let lines = locks.map { (res, info) -> String in
+            let who = (info["holderName"] as? String) ?? "?"
+            let mine = (info["holderID"] as? String) == cardID ? " (you)" : ""
+            return "- \(res) → \(who)\(mine)"
+        }.sorted()
+        sendResult(id, textContent("Advisory locks in this channel:\n" + lines.joined(separator: "\n")))
+
+    case "fleet_board":
+        guard let snap = readBoardSnapshot(channelDir) else {
+            sendResult(id, textContent("(board snapshot not available yet)")); return
+        }
+        let colNames = (snap["columns"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        let cards = (snap["cards"] as? [[String: Any]]) ?? []
+        var out = "Board columns: " + (colNames.isEmpty ? "(none)" : colNames.joined(separator: " | "))
+        if cards.isEmpty {
+            out += "\nNo cards in this channel yet."
+        } else {
+            out += "\nCards in this channel:\n" + cards.map { c -> String in
+                let t = (c["title"] as? String) ?? "?"
+                let col = (c["column"] as? String) ?? "?"
+                let st = (c["status"] as? String) ?? "?"
+                return "- \(t) [\(col)] (\(st))"
+            }.joined(separator: "\n")
+        }
+        sendResult(id, textContent(out))
+
+    case "fleet_create_card":
+        guard let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            sendResult(id, textContent("title is required", isError: true)); return
+        }
+        var intent: [String: Any] = ["kind": "create_card", "title": title]
+        if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
+        if let dir = arguments["dir"] as? String, !dir.isEmpty { intent["dir"] = dir }
+        appendBoardIntent(channelDir, intent)
+        sendResult(id, textContent("Requested new card \"\(title)\". It will appear on the board and join this channel shortly (check fleet_board)."))
+
+    case "fleet_move_card":
+        guard let card = (arguments["card"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !card.isEmpty,
+              let column = (arguments["column"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !column.isEmpty else {
+            sendResult(id, textContent("card and column are required", isError: true)); return
+        }
+        appendBoardIntent(channelDir, ["kind": "move_card", "card": card, "column": column])
+        sendResult(id, textContent("Requested move of \"\(card)\" to \"\(column)\" (check fleet_board)."))
 
     default:
         sendResult(id, textContent("Unknown tool: \(name)", isError: true))
