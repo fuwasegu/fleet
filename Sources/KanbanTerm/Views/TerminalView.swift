@@ -236,9 +236,8 @@ final class TerminalSessions {
             currentDirectory: Self.resolve(directory)
         )
         if startAgent, let card = BoardStore(context: context).card(withID: cardID) {
-            let cmd = Self.launchCommand(kind: card.agentKind, cardID: cardID, cardTitle: card.title,
-                                         channelID: card.channel?.id, resumeSessionID: resumeSessionID,
-                                         dangerSkip: dangerSkip)
+            let cmd = Self.launchCommand(card: card, directory: directory, explicitResume: resumeSessionID,
+                                         dangerSkip: dangerSkip, context: context)
             let bytes = ArraySlice(Array((cmd + "\n").utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
             term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
@@ -303,38 +302,61 @@ final class TerminalSessions {
     }
 
     /// エージェント種別に応じた起動コマンド文字列を組み立てる(シェルへ「入力」として送る)。
-    /// session id は UUID 相当の文字種のみ許可(細工ファイル名によるコマンドインジェクション防止)。
-    static func launchCommand(kind: AgentKind, cardID: UUID, cardTitle: String, channelID: UUID?,
-                             resumeSessionID: String?, dangerSkip: Bool) -> String {
-        let sid = resumeSessionID.flatMap {
-            $0.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil ? $0 : nil
+    /// カード毎にセッションを固定し、再オープン/再起動時に自動でそのセッションへ復帰する
+    /// (履歴から手動で選ばなくてよい)。session id は UUID 相当の文字種のみ許可(注入防止)。
+    static func launchCommand(card: Card, directory: String?, explicitResume: String?,
+                              dangerSkip: Bool, context: ModelContext) -> String {
+        func validID(_ s: String?) -> String? {
+            guard let s, s.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else { return nil }
+            return s
         }
-        switch kind {
+        let cardID = card.id
+        switch card.agentKind {
         case .claude:
-            var cmd = "claude"
-            if let sid { cmd += " --resume \(sid)" }
+            // ピン留めセッション id を決める。履歴ピッカーで明示指定があればそれに再ピンし、
+            // 無ければ既存のピン、それも無ければ新規 UUID を生成して保存。
+            let sid: String
+            if let explicit = validID(explicitResume) {
+                sid = explicit; card.claudeSessionID = explicit; try? context.save()
+            } else if let pinned = card.claudeSessionID {
+                sid = pinned
+            } else {
+                sid = UUID().uuidString; card.claudeSessionID = sid; try? context.save()
+            }
+            // 既にそのセッション jsonl があれば --resume、無ければ --session-id で新規作成。
+            let exists = ClaudeSessionsService.sessionExists(id: sid, cwd: resolve(directory))
+            var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
-            if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: cardTitle, channelID: channelID) {
+            if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
                 cmd += " --mcp-config \(shellQuote(cfgPath))"
                 cmd += " --append-system-prompt \(shellQuote(systemPrompt()))"
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
-            // 権限バイパスは resume でも一貫して効く --permission-mode bypassPermissions を使う。
             if dangerSkip { cmd += " --permission-mode bypassPermissions" }
             return cmd
         case .codex:
             // Codex は MCP を config.toml で読む。CODEX_HOME をカード毎に向け、そこへ
             // config.toml(fleet-bridge) と AGENTS.md(共通指示)を生成する(~/.codex 非汚染)。
             var prefix = ""
-            if let home = writeCodexConfig(cardID: cardID, cardTitle: cardTitle, channelID: channelID) {
-                prefix = "CODEX_HOME=\(shellQuote(home)) "
+            var home: String?
+            if let h = writeCodexConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
+                prefix = "CODEX_HOME=\(shellQuote(h)) "; home = h
             }
             var cmd = prefix + "codex"
-            if let sid { cmd += " resume \(sid)" }
+            // カード毎 CODEX_HOME なので、過去セッションがあれば --last で決定的に自動復帰。
+            if let home, codexHasSessions(home) { cmd += " resume --last" }
             if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
             return cmd
         }
+    }
+
+    /// CODEX_HOME/sessions 配下にセッション(rollout jsonl)が1つでもあるか。
+    private static func codexHasSessions(_ home: String) -> Bool {
+        let dir = (home as NSString).appendingPathComponent("sessions")
+        guard let en = FileManager.default.enumerator(atPath: dir) else { return false }
+        for case let f as String in en where f.hasSuffix(".jsonl") { return true }
+        return false
     }
 
     /// Codex 用の CODEX_HOME(config.toml + AGENTS.md)を生成してパスを返す。

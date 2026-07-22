@@ -26,6 +26,15 @@ enum ClaudeSessionsService {
             .replacingOccurrences(of: ".", with: "-")
     }
 
+    /// 指定 cwd の project ディレクトリに、このセッション id の jsonl が既にあるか。
+    /// 自動復帰で「--resume(既存) か --session-id(新規) か」を決めるのに使う。
+    static func sessionExists(id: String, cwd: String) -> Bool {
+        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+        let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
+        let path = (dir as NSString).appendingPathComponent("\(id).jsonl")
+        return FileManager.default.fileExists(atPath: path)
+    }
+
     static func list(forCwd cwd: String, limit: Int = 40) -> [ClaudeSession] {
         let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
         let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
