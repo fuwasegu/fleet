@@ -316,6 +316,9 @@ final class TerminalSessions {
         term.caretColor = NSColor(hex: theme.caret)
     }
 
+    /// このカードのターミナルセッションが既に生きているか。
+    func hasSession(_ cardID: UUID) -> Bool { views[cardID] != nil }
+
     /// カード削除時などにセッションを終了する(SIGTERM)。
     func close(_ cardID: UUID) {
         views[cardID]?.terminate()

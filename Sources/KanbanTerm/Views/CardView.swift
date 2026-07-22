@@ -384,6 +384,7 @@ struct CardView: View {
     @State private var changingDir = false
     @State private var pickingSession = false
     @State private var showingMemory = false
+    @State private var showConnectNotice = false
 
     var body: some View {
         CardFace(
@@ -452,6 +453,11 @@ struct CardView: View {
             .sheet(isPresented: $showingMemory) {
                 if let ch = card.channel { ChannelMemorySheet(channelID: ch.id, channelName: ch.name) }
             }
+            .alert("文脈共有を開始しました", isPresented: $showConnectNotice) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember) が有効になります。")
+            }
             .alert("カードを削除しますか?", isPresented: $confirmingDelete) {
                 Button("削除", role: .destructive, action: deleteCard)
                 Button("キャンセル", role: .cancel) {}
@@ -504,6 +510,10 @@ struct CardView: View {
                 if let targetID = uiState.cardFrames.first(where: { $0.key != card.id && $0.value.contains(value.location) })?.key,
                    let target = BoardStore(context: context).card(withID: targetID) {
                     try? BoardStore(context: context).connectCards(card, target)
+                    // 既に起動中の Agent には共有メモリツールが「次回 claude 起動」から効くことを案内
+                    if sessions.hasSession(card.id) || sessions.hasSession(targetID) {
+                        showConnectNotice = true
+                    }
                 }
                 uiState.connectingFromCardID = nil
                 uiState.connectDragLocation = nil

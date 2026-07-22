@@ -252,6 +252,32 @@ struct BoardStoreTests {
         #expect(a.channel?.cards.count == 4)
     }
 
+    @Test func deleteCardDissolvesOrphanChannel() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        _ = try store.connectCards(a, b)
+        try store.deleteCard(a)   // 残り1枚 → チャンネル解散
+        #expect(b.channel == nil)
+        #expect(try store.channels().isEmpty)
+    }
+
+    @Test func deleteCardKeepsChannelWithTwoRemaining() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let c = try store.addCard(title: "c", to: col)
+        let ch = try store.connectCards(a, b)
+        _ = try store.connectCards(b, c)
+        try store.deleteCard(a)   // 2枚残る → チャンネル存続
+        #expect(try store.channels().count == 1)
+        #expect(b.channel?.id == ch?.id)
+        #expect(c.channel?.id == ch?.id)
+        #expect(ch?.cards.count == 2)
+    }
+
     @Test func disconnectDissolvesWhenBelowTwo() throws {
         let store = try makeStore()
         let col = try store.addColumn(name: "A")

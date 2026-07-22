@@ -47,13 +47,12 @@ func appendEntry(_ text: String) {
           let s = String(data: d, encoding: .utf8) else { return }
     try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
     let line = Data((s + "\n").utf8)
-    if let h = try? FileHandle(forWritingTo: memoryURL) {
-        defer { try? h.close() }
-        _ = try? h.seekToEnd()
-        try? h.write(contentsOf: line)
-    } else {
-        try? line.write(to: memoryURL)
-    }
+    // O_APPEND: 複数 Agent が同時に書いてもオフセットがアトミックに進み、行が壊れない
+    let fd = memoryURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
+    guard fd >= 0 else { return }
+    let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    try? h.write(contentsOf: line)
+    try? h.close()
 }
 func readPeers() -> [String] {
     guard let d = try? Data(contentsOf: peersURL),

@@ -52,14 +52,17 @@ public enum ChannelStore {
         guard let data = try? encoder().encode(entry),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
-        let url = memoryFile(for: id)
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: Data(line.utf8))
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
-        }
+        appendLineAtomically(Data(line.utf8), to: memoryFile(for: id))
+    }
+
+    /// O_APPEND で追記する。seekToEnd+write と違い、複数プロセス(Fleet 本体と各カードの
+    /// fleet-bridge)が同時に書いてもオフセットがアトミックに進み、行が壊れない。
+    static func appendLineAtomically(_ data: Data, to url: URL) {
+        let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
+        guard fd >= 0 else { return }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try? h.write(contentsOf: data)
+        try? h.close()
     }
 
     public static func deleteEntry(_ entryID: String, from id: UUID) {

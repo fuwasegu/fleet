@@ -9,6 +9,7 @@ struct ChannelMemorySheet: View {
     let channelName: String
 
     @State private var entries: [ChannelEntry] = []
+    @State private var watcher: (any DispatchSourceFileSystemObject)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,8 +18,6 @@ struct ChannelMemorySheet: View {
                 Text(channelName).font(.headline).lineLimit(1)
                 Text("共有メモリ").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button { reload() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("再読み込み")
                 Button("閉じる") { dismiss() }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
             .padding(16)
@@ -59,10 +58,24 @@ struct ChannelMemorySheet: View {
             }
         }
         .frame(width: 480, height: 460)
-        .task { reload() }
+        .task { reload(); startWatching() }
+        .onDisappear { watcher?.cancel(); watcher = nil }
     }
 
     private func reload() {
         entries = ChannelStore.entries(for: channelID)
+    }
+
+    /// チャンネルディレクトリを監視して自動更新(Agent の fleet_remember が即座に映る)。
+    /// ファイル本体でなくディレクトリを watch する(削除時の書き直しで inode が変わるため)。
+    private func startWatching() {
+        let dir = ChannelStore.dir(for: channelID)
+        let fd = open(dir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        src.setEventHandler { reload() }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        watcher = src
     }
 }

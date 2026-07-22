@@ -89,6 +89,10 @@ public struct BoardStore {
         guard !trimmed.isEmpty else { throw BoardError.emptyName }
         card.title = trimmed
         try context.save()
+        // A2A: カード名は Agent の識別名(author/peers)なので peers.json を追従させる
+        if let ch = card.channel {
+            ChannelStore.writePeers(ch.cards.map(\.title), for: ch.id)
+        }
     }
 
     public func setCardDirectory(_ card: Card, path: String?) throws {
@@ -131,6 +135,7 @@ public struct BoardStore {
     }
 
     public func deleteCard(_ card: Card) throws {
+        try disconnectCard(card)   // A2A: チャンネルから離脱(1枚チャンネルの残留防止)
         let column = card.column
         context.delete(card)
         try context.save()
