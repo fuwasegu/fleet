@@ -10,8 +10,9 @@ enum PromptTheme {
     static let surface = Color(hex: "171B1B")!   // カード地
     static let text    = Color(hex: "CBCDD4")!   // 主テキスト
     static let muted   = Color(hex: "6A7078")!   // 補助 / 記号
-    static let ok      = Color(hex: "7FD962")!   // 稼働 / 完了
-    static let blocked = Color(hex: "E54B4D")!   // 承認待ち(唯一の警告色)
+    static let ok      = Color(hex: "7FD962")!   // 稼働
+    static let blocked = Color(hex: "E54B4D")!   // 承認待ち
+    static let done    = Color(hex: "F5A623")!   // 完了・未読(注意を引く琥珀)
     static let mono    = Font.system(size: 12, design: .monospaced)
 }
 
@@ -27,7 +28,7 @@ struct AgentStatusStyle {
 
     init(card: Card) {
         if card.isDone {
-            glyph = "✓"; tag = "DONE"; status = String(localized: "未読"); color = PromptTheme.ok; spin = false; ping = false; showQuestion = false
+            glyph = "✓"; tag = "DONE"; status = String(localized: "未読"); color = PromptTheme.done; spin = false; ping = true; showQuestion = false
             return
         }
         switch card.agentState {
@@ -59,6 +60,7 @@ struct CardFace: View {
     var body: some View {
         let style = AgentStatusStyle(card: card)
         let blocked = style.tag == "BLOCKED"
+        let done = style.tag == "DONE"
 
         VStack(alignment: .leading, spacing: 8) {
             // 状態行
@@ -161,9 +163,13 @@ struct CardFace: View {
         .background(PromptTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(blocked ? PromptTheme.blocked.opacity(0.55) : Color.white.opacity(0.08),
-                        lineWidth: 1)
+                .stroke(blocked ? PromptTheme.blocked.opacity(0.6)
+                        : done ? PromptTheme.done.opacity(0.75)
+                        : Color.white.opacity(0.08),
+                        lineWidth: (blocked || done) ? 1.5 : 1)
         )
+        // 未読(完了)は琥珀のグローで盤面上で目立たせる
+        .shadow(color: done ? PromptTheme.done.opacity(0.35) : .clear, radius: done ? 9 : 0)
     }
 
     /// `cwd on branch ▸` + 右端 PR 番号。方向記号は ▸ に統一(CHANEL)。
