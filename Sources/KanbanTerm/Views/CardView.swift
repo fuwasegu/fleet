@@ -390,7 +390,6 @@ struct CardView: View {
     @Environment(\.modelContext) private var context
     @Environment(BoardUIState.self) private var uiState
     @Environment(TerminalSessions.self) private var sessions
-    @Environment(A2AChannelHub.self) private var hub
     @Bindable var card: Card
 
     @GestureState private var isDragging = false
@@ -511,25 +510,26 @@ struct CardView: View {
         return ZStack(alignment: .trailing) {
             // 平常時: 端の細いタブ(常時見えて「つなげられる」と分かる目印)
             Capsule()
-                .fill(color.opacity(0.75))
-                .frame(width: 4, height: 22)
+                .fill(color.opacity(0.85))
+                .frame(width: 5, height: 26)
                 .opacity(active ? 0 : 1)
             // ホバー/接続中: リンクアイコン付きの全円ハンドル
             Circle()
                 .fill(color)
-                .frame(width: 22, height: 22)
-                .overlay(Image(systemName: "link").font(.system(size: 10, weight: .bold)).foregroundStyle(.black.opacity(0.75)))
+                .frame(width: 24, height: 24)
+                .overlay(Image(systemName: "link").font(.system(size: 11, weight: .bold)).foregroundStyle(.black.opacity(0.75)))
                 .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
                 .shadow(color: color.opacity(0.6), radius: 5)
                 .opacity(active ? (isConnecting ? 0.5 : 1) : 0)
-                .scaleEffect(active ? 1 : 0.5)
+                .scaleEffect(active ? 1 : 0.6)
         }
-        .frame(width: 22, height: 22, alignment: .trailing)
-        .offset(x: -4)   // カード内側に収める(クリップ回避)
+        // 右端に沿った広めのヒット領域(常時当たり判定)。掴み損ねてカード移動になるのを防ぐ。
+        .frame(width: 30, height: 52, alignment: .trailing)
+        .contentShape(Rectangle())
+        .offset(x: -3)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: active)
-        .help("ドラッグで別カードと文脈を共有")
-        .gesture(connectGesture)
-        .allowsHitTesting(active)
+        .help("ドラッグで別カードへ伸ばすと文脈を共有")
+        .highPriorityGesture(connectGesture)   // カード移動より接続を優先
     }
 
     private var connectGesture: some Gesture {
@@ -540,16 +540,28 @@ struct CardView: View {
                 uiState.connectDragLocation = value.location
             }
             .onEnded { value in
-                if let targetID = uiState.cardFrames.first(where: { $0.key != card.id && $0.value.contains(value.location) })?.key,
+                if let targetID = Self.dropTarget(at: value.location, excluding: card.id, frames: uiState.cardFrames),
                    let target = BoardStore(context: context).card(withID: targetID) {
-                    if let ch = try? BoardStore(context: context).connectCards(card, target) {
-                        // bridge は常時接続なので再起動は不要。稼働中の相手に「繋がったよ」を即通知する。
-                        hub.announceConnect(ch.id)
-                    }
+                    _ = try? BoardStore(context: context).connectCards(card, target)
+                    // bridge は常時接続。通知の自動注入はしない(チャットに勝手に入り邪魔なため)。
                 }
                 uiState.connectingFromCardID = nil
                 uiState.connectDragLocation = nil
             }
+    }
+
+    /// ドロップ地点から接続先カードを求める。矩形内なら即採用、無ければ少し外側(inset -36)で
+    /// 最も近いカードを拾う(端をかすめても繋がるように)。
+    private static func dropTarget(at loc: CGPoint, excluding selfID: UUID, frames: [UUID: CGRect]) -> UUID? {
+        let others = frames.filter { $0.key != selfID }
+        if let inside = others.first(where: { $0.value.contains(loc) })?.key { return inside }
+        let near = others
+            .filter { $0.value.insetBy(dx: -36, dy: -36).contains(loc) }
+            .min { a, b in
+                let ca = CGPoint(x: a.value.midX, y: a.value.midY), cb = CGPoint(x: b.value.midX, y: b.value.midY)
+                return hypot(ca.x - loc.x, ca.y - loc.y) < hypot(cb.x - loc.x, cb.y - loc.y)
+            }
+        return near?.key
     }
 
     private func beginRename() {
