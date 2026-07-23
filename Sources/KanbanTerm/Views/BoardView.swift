@@ -16,6 +16,17 @@ struct BoardView: View {
     @State private var showingCaffeine = false
     @State private var showingTokens = false
     @State private var showingSettings = false
+    @State private var showingAttention = false
+
+    /// 要対応カード(承認待ち or 未読完了)。ターミナル表示中の「他タスク」把握用に、開いている
+    /// カードは除外する。盤面が隠れていても上部バーで気づけるようにする。
+    private var attentionCards: [Card] {
+        columns.flatMap { $0.cards }
+            .filter { $0.id != uiState.terminalCardID && ($0.agentState == .blocked || $0.isDone) }
+            .sorted { ($0.agentState == .blocked ? 0 : 1, $0.title) < ($1.agentState == .blocked ? 0 : 1, $1.title) }
+    }
+    private var blockedCount: Int { attentionCards.filter { $0.agentState == .blocked }.count }
+    private var unreadDoneCount: Int { attentionCards.filter { $0.isDone }.count }
 
     var body: some View {
         Group {
@@ -51,6 +62,27 @@ struct BoardView: View {
         .animation(.easeInOut(duration: 0.15), value: uiState.terminalCardID)
         .navigationTitle("Fleet")
         .toolbar {
+            if !attentionCards.isEmpty {
+                ToolbarItem {
+                    Button { showingAttention.toggle() } label: {
+                        HStack(spacing: 10) {
+                            if blockedCount > 0 {
+                                Label("\(blockedCount)", systemImage: "bell.badge.fill")
+                                    .foregroundStyle(PromptTheme.blocked)
+                            }
+                            if unreadDoneCount > 0 {
+                                Label("\(unreadDoneCount)", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(PromptTheme.done)
+                            }
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                    }
+                    .help("他のカードの承認待ち / 未読完了")
+                    .popover(isPresented: $showingAttention, arrowEdge: .bottom) {
+                        attentionPopover
+                    }
+                }
+            }
             ToolbarItem {
                 Button {
                     showingTokens.toggle()
@@ -117,6 +149,36 @@ struct BoardView: View {
                 fetchGitInfo(for: card.id)
             }
         }
+    }
+
+    /// 要対応カードの一覧ポップオーバー。行をタップでそのカードのターミナルへ切替。
+    @ViewBuilder private var attentionPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("要対応").font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 6)
+            ForEach(attentionCards) { c in
+                let blocked = c.agentState == .blocked
+                Button {
+                    uiState.terminalCardID = c.id
+                    showingAttention = false
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: blocked ? "bell.badge.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(blocked ? PromptTheme.blocked : PromptTheme.done)
+                        Text(c.title).lineLimit(1)
+                        Spacer(minLength: 12)
+                        Text(blocked ? "承認待ち" : "未読").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: 300)
+        .padding(.bottom, 8)
     }
 
     /// カードから開くターミナルモーダル（ウィンドウ内オーバーレイ）。
