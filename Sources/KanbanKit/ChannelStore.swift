@@ -553,10 +553,24 @@ public enum ChannelStore {
         let collapsed = replaced
             .split(whereSeparator: { $0 == " " || $0.isWhitespace })
             .joined(separator: " ")
-        if collapsed.count > maxLength {
-            let truncated = String(collapsed.prefix(maxLength))
-            return truncated + "…"
+
+        // maxLength を書記素クラスタ(Character)単位でだけ切り詰めると、基底文字1つに
+        // 結合文字(combining mark)を何万個も連結した入力が「1文字」としてカウントされて
+        // 上限を素通りしてしまう(FIX I1)。書記素の上限に加えて Unicode スカラ単位の上限
+        // (maxLength * 4)でも切り詰め、どちらかが発火したら "…" を付ける。スカラ列から
+        // String を再構築するので、結果は常に妥当な UTF-8 になる。
+        var result = collapsed
+        var truncated = false
+        if result.count > maxLength {
+            result = String(result.prefix(maxLength))
+            truncated = true
         }
-        return collapsed
+        let scalarCeiling = maxLength * 4
+        if result.unicodeScalars.count > scalarCeiling {
+            let limited = String.UnicodeScalarView(result.unicodeScalars.prefix(scalarCeiling))
+            result = String(limited)
+            truncated = true
+        }
+        return truncated ? result + "…" : result
     }
 }

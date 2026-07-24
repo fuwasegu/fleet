@@ -270,6 +270,35 @@ public struct BoardStore {
         }
     }
 
+    /// binding.json の自己改竄への緩和策(C1)。fleet-bridge はカード自身の binding.json を
+    /// 唯一の「今どのチャンネルか」の入力源として信用するが、その agent 自身がシェル権限で
+    /// 同じファイルを別チャンネルの(有効な形の)UUID へ書き換えれば、bridge はそのチャンネルの
+    /// 共有メモリ/ロック/outbox を、アプリが一度もメンバーにしていない状態のまま操作してしまう。
+    /// アプリ(SwiftData)だけが本当の所属を知っているので、`~/.fleet/cards/*/binding.json` を
+    /// 総当りして各ファイルの内容を実際の所属で強制的に書き直す。件数は小さい(カード数)ため
+    /// 安価。破壊的な token 方式などの完全な対策は out of scope — シェル権限を持つ agent は
+    /// 他チャンネルのファイルを直接触れるので、ファイル衛生だけでは閉じきれない(bounded mitigation)。
+    /// 解析できないエントリ(UUID でないディレクトリ名・デコード不能な binding.json)は黙って無視する。
+    public func reconcileBindings() {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: ChannelStore.cardsDir(), includingPropertiesForKeys: nil) else { return }
+        for entry in entries {
+            guard let cardID = UUID(uuidString: entry.lastPathComponent) else { continue }
+            guard let binding = ChannelStore.readBinding(cardID: cardID) else { continue }
+            guard let card = card(withID: cardID) else {
+                // カード自体がもう存在しない(削除済み) → binding ディレクトリごと片付ける
+                // (deleteCard と同じ後片付け)。
+                ChannelStore.removeBinding(cardID: cardID)
+                continue
+            }
+            let realChannelID = card.channel?.id.uuidString
+            if binding.channel != realChannelID {
+                // disconnect と同じ書き込み経路(writeBinding)で真実へ上書きする。
+                ChannelStore.writeBinding(cardID: cardID, channel: card.channel?.id, name: card.title)
+            }
+        }
+    }
+
     /// Agent の盤面操作 intent(board-intents.jsonl)を適用する。
     /// create_card / move_card のみ(破壊操作なし)。move はチャンネル所属カードに限定。
     /// 適用済み id は記録し、成否に関わらず再適用しない(リトライ暴走防止)。

@@ -63,6 +63,9 @@ func authorName() -> String {
 let maxRememberBytes = 16 * 1024   // fleet_remember の上限(交錯・肥大防止)
 let maxRefsCount = 20              // refs 配列の要素数上限(SECURITY item 2: text だけでなく refs も肥大させ得る)
 let maxRefLength = 200             // refs 各要素の文字数上限
+let maxCardTitleLength = 200       // fleet_create_card の title 上限(M1: 無制限な Agent 入力の防止)
+let maxMemoryKindLength = 32       // fleet_remember の kind 上限(M1)
+let maxPeerNameLength = 100        // fleet_message/fleet_handoff の to(宛先ピア名)上限(M1)
 
 // MARK: - I/O
 
@@ -476,7 +479,8 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             sendResult(id, textContent("Note too large (\(text.utf8.count) bytes; max \(maxRememberBytes)). Summarize or split it.", isError: true))
             return
         }
-        let kind = (arguments["kind"] as? String)?.lowercased()
+        // kind も text/refs と同様に無制限だと memory.jsonl に任意の長さの値を書き込める(M1)。
+        let kind = (arguments["kind"] as? String).map { String($0.lowercased().prefix(maxMemoryKindLength)) }
         // refs は text と違ってバイト上限のチェックが無いため、要素数と各要素長を切り詰める
         // (SECURITY item 2: 無制限だと memory.jsonl に任意の巨大な行を追記できてしまう)。
         let refs = (arguments["refs"] as? [String]).map { raw in
@@ -505,9 +509,11 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         sendResult(id, textContent("Agents sharing this channel:\n" + lines.joined(separator: "\n")))
 
     case "fleet_message", "fleet_handoff":
-        guard let to = (arguments["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty else {
+        guard let rawTo = (arguments["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTo.isEmpty else {
             sendResult(id, textContent("to (peer name) is required", isError: true)); return
         }
+        // to は Agent が渡す任意の文字列(SECURITY: 無制限だと outbox.jsonl に肥大した宛先を書ける, M1)。
+        let to = String(rawTo.prefix(maxPeerNameLength))
         guard let text = arguments["text"] as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             sendResult(id, textContent("text is required", isError: true)); return
@@ -594,9 +600,12 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         sendResult(id, textContent(out))
 
     case "fleet_create_card":
-        guard let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+        guard let rawTitle = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTitle.isEmpty else {
             sendResult(id, textContent("title is required", isError: true)); return
         }
+        // title も Agent が渡す任意の文字列(SECURITY: 無制限だと board-intents.jsonl / 盤面に
+        // 肥大したタイトルを書ける, M1)。
+        let title = String(rawTitle.prefix(maxCardTitleLength))
         var intent: [String: Any] = ["kind": "create_card", "title": title]
         if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
         if let dir = arguments["dir"] as? String, !dir.isEmpty {

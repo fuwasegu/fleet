@@ -131,10 +131,19 @@ public enum AgentDetection {
         // Claude の TUI であることを示す他のシグナル(フッタのショートカットヒント等。
         // "transcript" ルールで既に TUI 証拠として使っているものを再利用)が
         // 同じ下部ウィンドウに無ければ、素のシェルを Idle と誤判定してしまう(実バグの回帰)。
-        .init("idle_caret", .idle, 250, .bottom(6),
+        //
+        // FIX I2: 上記のフッタヒントだけを証拠とすると、フッタが画面外に流れた/表示され
+        // なかった場合に Idle へ絶対に戻れず、A2A の outbox が(idle 待ちで)無期限に
+        // 溜まり続けてしまう(偽陰性)。証拠集合に Claude の入力欄の枠線(box-drawing。
+        // ╭╮╰╯─│)と working_footer が使う "esc to interrupt" を加えて偽陰性を減らし、
+        // 証拠を見る窓も下部6行→12行に広げる(フッタや枠線が少し上にあっても拾える)。
+        // それでも素のシェル単体(❯ だけ、枠線もヒントも無い)は依然 Idle にならない
+        // (bareShellPromptIsNotIdle で回帰確認)。
+        .init("idle_caret", .idle, 250, .bottom(12),
               .all([.lineRegex("^\\s*❯"),
                     .not(.containsAny(["enter to select", "esc to cancel", "arrow keys", "to navigate"])),
-                    .containsAny(["? for shortcuts", "ctrl+o", "ctrl+e", "↑↓ scroll"])])),
+                    .containsAny(["? for shortcuts", "ctrl+o", "ctrl+e", "↑↓ scroll", "esc to interrupt",
+                                   "╭", "╮", "╰", "╯", "│", "─"])])),
     ]
 
     // MARK: - Codex ルール(挙動という事実に基づく自作)

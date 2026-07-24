@@ -66,4 +66,21 @@ struct TerminalSanitizeTests {
         #expect(out.count == 2001) // 2000 + "…"
         #expect(out.hasSuffix("…"))
     }
+
+    /// FIX I1: 基底文字1つに結合文字(combining mark)を大量に連結すると、書記素クラスタ
+    /// (Character)単位では「1文字」にしか数えられず、count/prefix による上限が発火しない。
+    /// スカラ単位の上限も併用することで、term.send へ渡る出力サイズを必ず有界にする。
+    @Test func combiningMarkFloodIsBoundedByScalarCap() {
+        let s = "a" + String(repeating: "\u{0301}", count: 20000)
+        let maxLength = 2000
+        // 攻撃対象の入力は書記素クラスタとしては1文字なので、まず素通りの前提を確認する。
+        #expect(s.count == 1)
+        let out = ChannelStore.sanitizeForTerminal(s, maxLength: maxLength)
+        #expect(out.unicodeScalars.count <= 4 * maxLength + 1)
+    }
+
+    @Test func normalTextStillPassesUnchangedAfterScalarCapAdded() {
+        let s = "the quick brown fox jumps over the lazy dog"
+        #expect(ChannelStore.sanitizeForTerminal(s) == s)
+    }
 }

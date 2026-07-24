@@ -29,6 +29,9 @@ final class A2AChannelHub {
 
     /// 現在のチャンネル集合に watcher を合わせる。接続/解除で呼ぶ(冪等)。
     func sync(channelIDs: [UUID]) {
+        // C1 緩和: binding.json の自己改竄をここ(起動時/接続/解除。ファイル監視イベント毎では
+        // ない=コスト低)で真実へ強制的に戻す。件数はカード数程度なので毎回呼んでも安価。
+        if let context { BoardStore(context: context).reconcileBindings() }
         let ids = Set(channelIDs)
         for (id, w) in watchers where !ids.contains(id) { w.cancel(); watchers[id] = nil }
         for id in ids where watchers[id] == nil { startWatch(id) }

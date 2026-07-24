@@ -50,6 +50,32 @@ struct AgentDetectionTests {
         #expect(c("", lines) == .idle)
     }
 
+    @Test func claudeIdleWithInputBoxFrameEvidenceIsIdle() {
+        // FIX I2: "? for shortcuts" 等のフッタヒントが画面外に流れて見えなくても、
+        // Claude の入力欄の枠線(╭─...│...╰─)があれば TUI 証拠として Idle と判定できる
+        // (偽陰性の低減)。キャレット行(❯)自体は既存テストと同じく素の行として置く。
+        let lines = [
+            "assistant output",
+            "╭─────────────────────────────╮",
+            "│ >                           │",
+            "╰─────────────────────────────╯",
+            "❯ ",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func claudeIdleWithFooterHintBeyondOldWindowIsIdle() {
+        // 従来の下部6行の窓では ❯ とフッタヒントが同時に入らない配置(キャレットが
+        // 7行以上前)でも、証拠ウィンドウを12行に広げたことで拾える(偽陰性の低減)。
+        let lines = [
+            "❯ ",
+            "line a", "line b", "line c", "line d", "line e",
+            "line f", "line g", "line h",
+            "? for shortcuts",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
     @Test func bareShellPromptIsNotIdle() {
         // ❯ は pure/starship/oh-my-zsh 等の素のシェルプロンプトでも極めて一般的な記号。
         // Claude TUI の証拠(ヒントフッタ等)が無ければ、素のシェルを Idle(=A2A hub がメッセージを
