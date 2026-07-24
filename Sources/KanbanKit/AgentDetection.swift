@@ -126,10 +126,15 @@ public enum AgentDetection {
         .init("working_footer", .working, 700, .whole, .contains(["esc to interrupt"])),
         // 待機: タイトル ✳
         .init("idle_star", .idle, 300, .oscTitle, .regex(starTitle)),
-        // 待機: 入力プロンプト行 ❯(選択フォームでない)
+        // 待機: 入力プロンプト行 ❯(選択フォームでない)+ Claude TUI が実在する証拠。
+        // ❯ は pure/starship/oh-my-zsh 等の素のシェルプロンプトでも極めて一般的な記号なので、
+        // Claude の TUI であることを示す他のシグナル(フッタのショートカットヒント等。
+        // "transcript" ルールで既に TUI 証拠として使っているものを再利用)が
+        // 同じ下部ウィンドウに無ければ、素のシェルを Idle と誤判定してしまう(実バグの回帰)。
         .init("idle_caret", .idle, 250, .bottom(6),
               .all([.lineRegex("^\\s*❯"),
-                    .not(.containsAny(["enter to select", "esc to cancel", "arrow keys", "to navigate"]))])),
+                    .not(.containsAny(["enter to select", "esc to cancel", "arrow keys", "to navigate"])),
+                    .containsAny(["? for shortcuts", "ctrl+o", "ctrl+e", "↑↓ scroll"])])),
     ]
 
     // MARK: - Codex ルール(挙動という事実に基づく自作)

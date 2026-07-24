@@ -36,7 +36,26 @@ struct AgentDetectionTests {
     @Test func claudeIdleFromStarTitle() { #expect(c("\u{2733} ready", []) == .idle) }
 
     @Test func claudeIdleFromPromptCaret() {
-        #expect(c("", ["assistant output", "❯ "]) == .idle)
+        // 単なる ❯ ではなく、Claude TUI のヒントフッタ(証拠)が同じ下部ウィンドウにある場合のみ Idle。
+        #expect(c("", ["assistant output", "❯ ", "? for shortcuts"]) == .idle)
+    }
+
+    @Test func claudeIdleWithTUIEvidenceIsIdle() {
+        // idleFromPromptCaret と同型の、より実際の Claude 画面に近いフィクスチャ。
+        let lines = [
+            "assistant output",
+            "❯ ",
+            "? for shortcuts · shift+tab to cycle",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func bareShellPromptIsNotIdle() {
+        // ❯ は pure/starship/oh-my-zsh 等の素のシェルプロンプトでも極めて一般的な記号。
+        // Claude TUI の証拠(ヒントフッタ等)が無ければ、素のシェルを Idle(=A2A hub がメッセージを
+        // 投げ込んで良い状態)と誤判定してはならない(実バグの回帰)。
+        #expect(c("", ["❯ "]) != .idle)
+        #expect(c("", ["❯ git status"]) != .idle)
     }
 
     @Test func claudeWorkingFromFooter() {
