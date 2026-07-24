@@ -36,29 +36,15 @@ struct ColumnView: View {
             .font(.caption)
         }
         .sheet(isPresented: $addingCard) {
-            NewCardSheet { title, dir, autoStart, danger, kind, wtInfo in
-                if let wtInfo {
-                    // worktree 作成をカード作成より先に行う: git 失敗時に孤児カードを残さないため。
-                    let path = try WorktreeService.create(
-                        repoRoot: wtInfo.repoRoot, branch: wtInfo.branch, baseRef: wtInfo.baseRef,
-                        baseDir: "../.fleet-worktrees"
-                    )
-                    let card = try store.addCard(
-                        title: title, to: column,
-                        workingDirPath: nil, dangerSkip: danger, autoStartAgent: autoStart,
-                        agentKind: kind
-                    )
-                    try store.setWorktree(
-                        card, repoRoot: wtInfo.repoRoot, worktreePath: path,
-                        branch: WorktreeService.sanitizeBranch(wtInfo.branch), fleetOwned: true
-                    )
-                } else {
-                    try store.addCard(
-                        title: title, to: column,
-                        workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart,
-                        agentKind: kind
-                    )
-                }
+            // worktree ありのカード作成(git 呼び出しの非同期化・スピナー表示)はシート自身が
+            // store/column を使って行う。ここで渡す onCreate は worktree を伴わない
+            // (フォルダ紐づけ or 何もなし)、同期・即座に完了するケースのみを扱う。
+            NewCardSheet(store: store, column: column) { title, dir, autoStart, danger, kind in
+                try store.addCard(
+                    title: title, to: column,
+                    workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart,
+                    agentKind: kind
+                )
             }
         }
         .padding(10)
