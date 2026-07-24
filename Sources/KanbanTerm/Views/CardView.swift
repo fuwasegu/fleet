@@ -487,7 +487,7 @@ struct CardView: View {
                     if let r = card.repoRoot, r != card.effectiveCwd { arr.append(r) }
                     return arr
                 }()
-                SessionPickerSheet(cwds: dirs) { sessionID in
+                SessionPickerSheet(cwds: dirs, configDir: card.claudeProfile?.configDirPath) { sessionID in
                     resumeSession(sessionID)
                 }
             }

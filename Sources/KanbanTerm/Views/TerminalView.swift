@@ -333,8 +333,17 @@ final class TerminalSessions {
             // ピン留め済みセッションが worktree の project ディレクトリには無い」と誤判定し、
             // 実在するのに --session-id(新規)を選んでしまい "already in use" で失敗する。
             // なので project ディレクトリ全体からこの id を探す(あればどの cwd でも --resume)。
-            let exists = ClaudeSessionsService.sessionExistsAnywhere(id: sid)
+            // カードに ClaudeProfile が割り当てられていれば、そのセッション履歴は
+            // `~/.claude/projects` ではなく `<configDirPath>/projects` に生成されるため、
+            // 存在チェックも起動 env(CLAUDE_CONFIG_DIR)と同じ configDir を基準にする
+            // (基準がずれると "already in use" を再現する)。
+            let cfgDir = card.claudeProfile?.configDirPath
+            let exists = ClaudeSessionsService.sessionExistsAnywhere(id: sid, configDir: cfgDir)
             var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
+            if let cfgDir, !cfgDir.isEmpty {
+                let expandedCfgDir = (cfgDir as NSString).expandingTildeInPath
+                cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(expandedCfgDir)) " + cmd
+            }
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
             if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
                 cmd += " --mcp-config \(shellQuote(cfgPath))"
