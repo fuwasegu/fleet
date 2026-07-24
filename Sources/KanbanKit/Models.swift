@@ -65,6 +65,27 @@ public final class Channel {
     }
 }
 
+/// 名前付き Claude 設定プロファイル(ラベル + `CLAUDE_CONFIG_DIR`)。
+/// カードに割り当てることで、別アカウント/ライセンスの config dir を向けて claude CLI を起動できる。
+@Model
+public final class ClaudeProfile {
+    public var id: UUID
+    public var label: String
+    public var configDirPath: String
+    public var order: Int
+
+    @Relationship(deleteRule: .nullify, inverse: \Card.claudeProfile)
+    public var cards: [Card]
+
+    public init(id: UUID = UUID(), label: String, configDirPath: String, order: Int) {
+        self.id = id
+        self.label = label
+        self.configDirPath = configDirPath
+        self.order = order
+        self.cards = []
+    }
+}
+
 @Model
 public final class Card {
     public var id: UUID
@@ -72,6 +93,8 @@ public final class Card {
     public var order: Int
     public var column: BoardColumn?
     public var channel: Channel?   // A2A: 所属する共有メモリチャンネル(0..1)
+    @Relationship(deleteRule: .nullify)
+    public var claudeProfile: ClaudeProfile? = nil   // 割り当てた Claude 設定プロファイル(config dir 切替用)
 
     // 宣言時デフォルト値は SwiftData の軽量マイグレーション(既存ストアへ属性追加)に必須。
     public var workingDirPath: String? = nil

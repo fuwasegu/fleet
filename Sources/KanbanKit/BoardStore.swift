@@ -390,6 +390,42 @@ public struct BoardStore {
         return a.title.isEmpty ? "channel" : String(a.title.prefix(20))
     }
 
+    // MARK: - Claude プロファイル (config dir 切替)
+
+    /// プロファイルを order 昇順 → label 昇順で取得
+    public func profiles() throws -> [ClaudeProfile] {
+        let descriptor = FetchDescriptor<ClaudeProfile>(
+            sortBy: [SortDescriptor(\.order), SortDescriptor(\.label)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    @discardableResult
+    public func addProfile(label: String, configDirPath: String) throws -> ClaudeProfile {
+        let next = (try profiles().map(\.order).max() ?? -1) + 1
+        let profile = ClaudeProfile(label: label, configDirPath: configDirPath, order: next)
+        context.insert(profile)
+        try context.save()
+        return profile
+    }
+
+    public func updateProfile(_ p: ClaudeProfile, label: String, configDirPath: String) throws {
+        p.label = label
+        p.configDirPath = configDirPath
+        try context.save()
+    }
+
+    /// プロファイルを削除する。割り当て済みカードは nullify される(カード自体は残る)。
+    public func deleteProfile(_ p: ClaudeProfile) throws {
+        context.delete(p)
+        try context.save()
+    }
+
+    public func setCardProfile(_ card: Card, profile: ClaudeProfile?) throws {
+        card.claudeProfile = profile
+        try context.save()
+    }
+
     // MARK: - order 正規化 (0..n-1)
 
     private func normalizeColumnOrders() {
