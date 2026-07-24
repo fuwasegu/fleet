@@ -196,11 +196,11 @@ struct BoardView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "terminal")
                         Text(card.title).font(.headline).lineLimit(1)
-                        Text(card.workingDirPath ?? "~")
+                        Text(card.effectiveCwd ?? "~")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                         Spacer()
                         Button {
-                            openMarkdownPicker(cwd: card.workingDirPath)
+                            openMarkdownPicker(cwd: card.effectiveCwd)
                         } label: {
                             Label("Markdown", systemImage: "doc.richtext")
                         }

@@ -465,7 +465,7 @@ struct CardView: View {
                     Button { pickingSession = true } label: {
                         Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
                     }
-                    .disabled(card.workingDirPath == nil)
+                    .disabled(card.effectiveCwd == nil)
                 }
                 Divider()
                 Button(role: .destructive, action: beginDelete) {
@@ -478,7 +478,7 @@ struct CardView: View {
                 }
             }
             .sheet(isPresented: $pickingSession) {
-                SessionPickerSheet(cwd: card.workingDirPath) { sessionID in
+                SessionPickerSheet(cwd: card.effectiveCwd) { sessionID in
                     resumeSession(sessionID)
                 }
             }
