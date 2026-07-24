@@ -320,14 +320,9 @@ final class TerminalSessions {
         case .claude:
             // ピン留めセッション id を決める。履歴ピッカーで明示指定があればそれに再ピンし、
             // 無ければ既存のピン、それも無ければ新規 UUID を生成して保存。
-            let sid: String
-            if let explicit = validID(explicitResume) {
-                sid = explicit; card.claudeSessionID = explicit; try? context.save()
-            } else if let pinned = card.claudeSessionID {
-                sid = pinned
-            } else {
-                sid = UUID().uuidString; card.claudeSessionID = sid; try? context.save()
-            }
+            let explicit = validID(explicitResume)
+            let pinned = card.claudeSessionID
+            let freshID = UUID().uuidString
             // `claude --resume <uuid>` は cwd に関係なく id だけで解決できる。worktree カードは
             // cwd が元 repo と別物になるため、cwd 限定の存在チェックだと「元 repo で作った
             // ピン留め済みセッションが worktree の project ディレクトリには無い」と誤判定し、
@@ -338,8 +333,26 @@ final class TerminalSessions {
             // 存在チェックも起動 env(CLAUDE_CONFIG_DIR)と同じ configDir を基準にする
             // (基準がずれると "already in use" を再現する)。
             let cfgDir = card.claudeProfile?.configDirPath
-            let exists = ClaudeSessionsService.sessionExistsAnywhere(id: sid, configDir: cfgDir)
-            var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
+            let mode = ClaudeSessionsService.resolveLaunchMode(
+                explicitResumeID: explicit,
+                pinnedSessionID: pinned,
+                newSessionID: freshID,
+                sessionExists: { ClaudeSessionsService.sessionExistsAnywhere(id: $0, configDir: cfgDir) }
+            )
+            let sid: String
+            var cmd: String
+            switch mode {
+            case .resume(let id):
+                sid = id; cmd = "claude --resume \(id)"
+            case .createNew(let id):
+                sid = id; cmd = "claude --session-id \(id)"
+            }
+            // 明示指定 or 新規発行のときだけカードへピン留めを更新(既存ピンをそのまま使った
+            // 場合は変更なし)。挙動は元の if/else チェーンと同一。
+            if explicit != nil || pinned == nil {
+                card.claudeSessionID = sid
+                try? context.save()
+            }
             if let cfgDir, !cfgDir.isEmpty {
                 let expandedCfgDir = (cfgDir as NSString).expandingTildeInPath
                 cmd = "CLAUDE_CONFIG_DIR=\(WorktreeService.shellQuote(expandedCfgDir)) " + cmd
