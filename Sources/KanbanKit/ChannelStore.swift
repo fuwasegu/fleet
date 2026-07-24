@@ -92,8 +92,37 @@ public struct BoardSnapshot: Codable, Sendable, Equatable {
     }
     public struct CardRef: Codable, Sendable, Equatable {
         public var id: String; public var title: String; public var column: String; public var status: String
-        public init(id: String, title: String, column: String, status: String) {
+        // Fleet 管理 worktree バインディング(旧 board.json には無いフィールド。decode 時は欠落を許容)。
+        public var repoRoot: String?
+        public var worktreePath: String?
+        public var branch: String?
+        public var isFleetOwnedWorktree: Bool
+
+        public init(id: String, title: String, column: String, status: String,
+                    repoRoot: String? = nil, worktreePath: String? = nil, branch: String? = nil,
+                    isFleetOwnedWorktree: Bool = false) {
             self.id = id; self.title = title; self.column = column; self.status = status
+            self.repoRoot = repoRoot; self.worktreePath = worktreePath; self.branch = branch
+            self.isFleetOwnedWorktree = isFleetOwnedWorktree
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, title, column, status, repoRoot, worktreePath, branch, isFleetOwnedWorktree
+        }
+
+        // 手書き init(from:): isFleetOwnedWorktree のような非 Optional 追加フィールドは
+        // 合成 Decodable だとキー欠落で全体デコード失敗になるため、旧 board.json との
+        // 後方互換のため decodeIfPresent + デフォルト値で吸収する。
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            title = try c.decode(String.self, forKey: .title)
+            column = try c.decode(String.self, forKey: .column)
+            status = try c.decode(String.self, forKey: .status)
+            repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
+            worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+            branch = try c.decodeIfPresent(String.self, forKey: .branch)
+            isFleetOwnedWorktree = try c.decodeIfPresent(Bool.self, forKey: .isFleetOwnedWorktree) ?? false
         }
     }
     public var columns: [Col]

@@ -350,6 +350,11 @@ let toolDefs: [[String: Any]] = [
             ],
             "required": ["card", "column"]
         ]
+    ],
+    [
+        "name": "fleet_worktree_info",
+        "description": "Get this card's Fleet-managed git worktree binding: repo root, worktree path, branch, and whether Fleet owns this worktree. Read-only — use it to learn where your working directory lives on disk. Does not create or delete worktrees.",
+        "inputSchema": ["type": "object", "properties": [:]]
     ]
 ]
 
@@ -533,6 +538,28 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         }
         appendBoardIntent(["kind": "move_card", "card": card, "column": column])
         sendResult(id, textContent("Requested move of \"\(card)\" to \"\(column)\" (check fleet_board)."))
+
+    case "fleet_worktree_info":
+        var info: [String: Any] = [
+            "repoRoot": NSNull(), "worktreePath": NSNull(), "branch": NSNull(),
+            "isFleetOwnedWorktree": false
+        ]
+        if let snap = readBoardSnapshot(channelDir),
+           let cards = snap["cards"] as? [[String: Any]],
+           let card = cards.first(where: { ($0["id"] as? String) == cardID }) {
+            info["repoRoot"] = card["repoRoot"] ?? NSNull()
+            info["worktreePath"] = card["worktreePath"] ?? NSNull()
+            info["branch"] = card["branch"] ?? NSNull()
+            info["isFleetOwnedWorktree"] = (card["isFleetOwnedWorktree"] as? Bool) ?? false
+        }
+        let jsonText: String
+        if let d = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]),
+           let s = String(data: d, encoding: .utf8) {
+            jsonText = s
+        } else {
+            jsonText = "{\"repoRoot\":null,\"worktreePath\":null,\"branch\":null,\"isFleetOwnedWorktree\":false}"
+        }
+        sendResult(id, textContent(jsonText))
 
     default:
         sendResult(id, textContent("Unknown tool: \(name)", isError: true))

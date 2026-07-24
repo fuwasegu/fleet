@@ -315,7 +315,9 @@ public struct BoardStore {
         let cards = sorted.map { c in
             BoardSnapshot.CardRef(id: c.id.uuidString, title: c.title,
                                   column: c.column?.name ?? "",
-                                  status: c.isDone ? "done" : c.agentState.rawValue)
+                                  status: c.isDone ? "done" : c.agentState.rawValue,
+                                  repoRoot: c.repoRoot, worktreePath: c.worktreePath,
+                                  branch: c.branch, isFleetOwnedWorktree: c.isFleetOwnedWorktree)
         }
         ChannelStore.writeBoardSnapshot(BoardSnapshot(columns: cols, cards: cards), for: channelID)
     }
