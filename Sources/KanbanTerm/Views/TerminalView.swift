@@ -328,8 +328,12 @@ final class TerminalSessions {
             } else {
                 sid = UUID().uuidString; card.claudeSessionID = sid; try? context.save()
             }
-            // 既にそのセッション jsonl があれば --resume、無ければ --session-id で新規作成。
-            let exists = ClaudeSessionsService.sessionExists(id: sid, cwd: resolve(directory))
+            // `claude --resume <uuid>` は cwd に関係なく id だけで解決できる。worktree カードは
+            // cwd が元 repo と別物になるため、cwd 限定の存在チェックだと「元 repo で作った
+            // ピン留め済みセッションが worktree の project ディレクトリには無い」と誤判定し、
+            // 実在するのに --session-id(新規)を選んでしまい "already in use" で失敗する。
+            // なので project ディレクトリ全体からこの id を探す(あればどの cwd でも --resume)。
+            let exists = ClaudeSessionsService.sessionExistsAnywhere(id: sid)
             var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
             if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {

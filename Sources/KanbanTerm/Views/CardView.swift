@@ -478,7 +478,16 @@ struct CardView: View {
                 }
             }
             .sheet(isPresented: $pickingSession) {
-                SessionPickerSheet(cwd: card.effectiveCwd) { sessionID in
+                // worktree カードは worktree 本体 + 元 repo(repoRoot)の両方から過去セッションを集める。
+                // (worktree 化される前に元 repo の cwd で作られたセッションが「出てこない」問題への対応)
+                // フォルダカードは repoRoot が無いので従来どおり単一 cwd のまま。
+                let dirs: [String] = {
+                    var arr = [String]()
+                    if let c = card.effectiveCwd { arr.append(c) }
+                    if let r = card.repoRoot, r != card.effectiveCwd { arr.append(r) }
+                    return arr
+                }()
+                SessionPickerSheet(cwds: dirs) { sessionID in
                     resumeSession(sessionID)
                 }
             }
