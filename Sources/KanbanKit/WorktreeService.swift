@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WorktreeBase { case current, defaultBranch }
+public enum WorktreeBase: Hashable { case current, defaultBranch }
 
 public struct WorktreeService {
     public static func sanitizeBranch(_ raw: String) -> String {

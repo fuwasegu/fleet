@@ -36,14 +36,29 @@ struct ColumnView: View {
             .font(.caption)
         }
         .sheet(isPresented: $addingCard) {
-            NewCardSheet { title, dir, autoStart, danger, kind in
-                do {
+            NewCardSheet { title, dir, autoStart, danger, kind, wtInfo in
+                if let wtInfo {
+                    // worktree 作成をカード作成より先に行う: git 失敗時に孤児カードを残さないため。
+                    let path = try WorktreeService.create(
+                        repoRoot: wtInfo.repoRoot, branch: wtInfo.branch, base: wtInfo.base,
+                        baseDir: "../.fleet-worktrees"
+                    )
+                    let card = try store.addCard(
+                        title: title, to: column,
+                        workingDirPath: nil, dangerSkip: danger, autoStartAgent: autoStart,
+                        agentKind: kind
+                    )
+                    try store.setWorktree(
+                        card, repoRoot: wtInfo.repoRoot, worktreePath: path,
+                        branch: WorktreeService.sanitizeBranch(wtInfo.branch), fleetOwned: true
+                    )
+                } else {
                     try store.addCard(
                         title: title, to: column,
                         workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart,
                         agentKind: kind
                     )
-                } catch {}
+                }
             }
         }
         .padding(10)
