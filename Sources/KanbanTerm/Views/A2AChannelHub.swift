@@ -15,6 +15,12 @@ import KanbanKit
 final class A2AChannelHub {
     private var watchers: [UUID: any DispatchSourceFileSystemObject] = [:]
     private var debounce: [UUID: Task<Void, Never>] = [:]
+    /// channelID ごとの「処理中」フラグ。`applyWorktreeIntentsAsync` は git 呼び出しを挟んで
+    /// await するため、同じチャンネルに対するファイル監視イベントが重なって並行実行されると
+    /// 同一 intent を二重に読む/適用済み集合の書き込みが競合する恐れがある。処理中は次のイベントを
+    /// 素通りさせず、完了後に取りこぼしを検知した場合のみ 1 回だけ再処理する(冪等性の保護)。
+    private var processing: Set<UUID> = []
+    private var pendingReprocess: Set<UUID> = []
     private weak var sessions: TerminalSessions?
     private var context: ModelContext?
     private weak var uiState: BoardUIState?
@@ -56,20 +62,40 @@ final class A2AChannelHub {
     }
 
     /// 監視イベントはまとめて弾けるので 150ms デバウンスしてから処理する。
+    /// `process` は git 呼び出し(worktree intent 適用)を含み await するので、ここから直接
+    /// 呼ばずに `Task { }` へ切り出す(呼び出し元の同期コンテキストを塞がないため)。
     private func schedule(_ id: UUID) {
         debounce[id]?.cancel()
         debounce[id] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
-            self?.process(id)
+            await self?.process(id)
         }
     }
 
-    private func process(_ channelID: UUID) {
+    private func process(_ channelID: UUID) async {
+        // in-flight ガード: 同じチャンネルへの処理が既に進行中なら、二重実行(intent の
+        // 二重適用/適用済み集合の競合書き込み)を避けて素通りさせる。ただしその間にも
+        // watcher イベントが来ている可能性があるので、完了後にもう一度だけ再処理する
+        // (取りこぼし防止。単なる早期 return だと、処理中に届いた新しい intent が
+        // 次のイベントを待つまで永遠に処理されないままになる)。
+        guard !processing.contains(channelID) else {
+            pendingReprocess.insert(channelID)
+            return
+        }
+        processing.insert(channelID)
+        await runOnce(channelID)
+        processing.remove(channelID)
+        if pendingReprocess.remove(channelID) != nil {
+            await process(channelID)
+        }
+    }
+
+    private func runOnce(_ channelID: UUID) async {
         guard let context else { return }
         let store = BoardStore(context: context)
-        store.applyBoardIntents(for: channelID)                 // Agent の盤面操作(create/move)を適用
-        store.applyWorktreeIntents(for: channelID)              // Agent の worktree 作成 intent を適用
+        store.applyBoardIntents(for: channelID)                      // Agent の盤面操作(create/move)を適用
+        await store.applyWorktreeIntentsAsync(for: channelID)         // Agent の worktree 作成 intent を適用(git は MainActor 外)
         if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期
         store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット(worktree 反映)
         deliverOutbox(channelID, store: store)                  // outbox の push 配信

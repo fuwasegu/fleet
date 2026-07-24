@@ -50,6 +50,9 @@ struct CardFace: View {
     let card: Card
     var showActions: Bool = false
     var hasPendingMessage: Bool = false   // A2A: 未配信メッセージが溜まっている(封筒バッジ)
+    /// 削除確認フロー用に worktree の削除可否(git 呼び出し)を確認中/実行中。
+    /// true の間はゴミ箱ボタンを無効化しスピナーに置き換える(連打による二重実行防止・処理中の可視化)。
+    var deleteBusy: Bool = false
     var onEdit: () -> Void = {}
     var onDelete: () -> Void = {}
     var onOpenTerminal: () -> Void = {}
@@ -82,11 +85,18 @@ struct CardFace: View {
                         .font(.system(size: 11))
                         .foregroundStyle(PromptTheme.muted)
                         .help("カード名を編集")
-                    Button(action: onDelete) { Image(systemName: "trash") }
+                    Button(action: onDelete) {
+                        if deleteBusy {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "trash")
+                        }
+                    }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
                         .foregroundStyle(PromptTheme.muted)
-                        .help("カードを削除")
+                        .disabled(deleteBusy)
+                        .help(deleteBusy ? "削除可否を確認中…" : "カードを削除")
                 }
             }
             .font(PromptTheme.mono.weight(.semibold))
@@ -413,12 +423,16 @@ struct CardView: View {
     @State private var confirmingCleanWorktreeDelete = false        // risk == .clean
     @State private var warningWorktreeRisk: WorktreeService.RemovalRisk?  // risk == .dirty/.unpushed/.inUse
     @State private var worktreeDeleteError: String?                 // removeSafely が throw した場合
+    /// removalRisk 確認中 / removeSafely 実行中(いずれも git 呼び出しでブロックしうるため
+    /// Task.detached で走らせている間)true。ゴミ箱ボタンを無効化し二重実行を防ぐ。
+    @State private var worktreeBusy = false
 
     var body: some View {
         CardFace(
             card: card,
             showActions: true,
             hasPendingMessage: uiState.pendingMessageCardIDs.contains(card.id),
+            deleteBusy: worktreeBusy,
             onEdit: beginRename,
             onDelete: beginDelete,
             onOpenTerminal: { uiState.terminalCardID = card.id },
@@ -495,6 +509,7 @@ struct CardView: View {
                 Button(role: .destructive, action: beginDelete) {
                     Label("カードを削除", systemImage: "trash")
                 }
+                .disabled(worktreeBusy)
             }
             .sheet(isPresented: $renaming) {
                 RenameCardSheet(title: $draft) { newTitle in
@@ -654,6 +669,11 @@ struct CardView: View {
 
     /// カード削除の入口。Fleet 所有 worktree が紐づく場合のみ安全確認フローに分岐し、
     /// それ以外(フォルダカード/非所有 worktree)は従来どおり即確認ダイアログ。
+    ///
+    /// `removalRisk` は最大 5 回の逐次 git 呼び出し(status/rev-parse/merge-base/rev-list 等)を
+    /// 行いうるため、MainActor 上で直接呼ぶとその間 UI 全体がフリーズする。`Task.detached` へ
+    /// 逃がし(渡すのは worktreePath/repoRoot/inUse という値型のみ、Card/ModelContext は
+    /// キャプチャしない)、確認中はゴミ箱ボタンを無効化してスピナーを出す。
     private func beginDelete() {
         guard card.isFleetOwnedWorktree,
               let worktreePath = card.worktreePath,
@@ -661,13 +681,23 @@ struct CardView: View {
             confirmingDelete = true
             return
         }
+        guard !worktreeBusy else { return }   // 確認中の二重タップ防止
+        worktreeBusy = true
         let inUse = sessions.hasSession(card.id)
-        let risk = WorktreeService.removalRisk(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
-        switch risk {
-        case .clean:
-            confirmingCleanWorktreeDelete = true
-        case .dirty, .unpushed, .inUse:
-            warningWorktreeRisk = risk
+        let cardID = card.id
+        Task {
+            let risk = await Task.detached(priority: .userInitiated) {
+                WorktreeService.removalRisk(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+            }.value
+            worktreeBusy = false
+            // await の間にカード自体が削除されていたら何もしない(ダイアログを出す相手がいない)。
+            guard BoardStore(context: context).card(withID: cardID) != nil else { return }
+            switch risk {
+            case .clean:
+                confirmingCleanWorktreeDelete = true
+            case .dirty, .unpushed, .inUse:
+                warningWorktreeRisk = risk
+            }
         }
     }
 
@@ -695,20 +725,42 @@ struct CardView: View {
 
     /// worktree をディスクから安全に撤去してからカードを削除する(risk == .clean のときのみ到達)。
     /// `removeSafely` は clean 以外なら throw し、`--force` は一切使わない。
+    /// `removalRisk` の再チェック + `git worktree remove`/`prune` を含むため、こちらも
+    /// `Task.detached` に逃がして MainActor をブロックしない(渡すのは値型のみ)。
     private func removeWorktreeThenDeleteCard() {
         guard let worktreePath = card.worktreePath, let repoRoot = card.repoRoot else {
             deleteCard()
             return
         }
+        guard !worktreeBusy else { return }
+        worktreeBusy = true
         let inUse = sessions.hasSession(card.id)
-        do {
-            try WorktreeService.removeSafely(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
-            try BoardStore(context: context).clearWorktree(card)
-            deleteCard()
-        } catch let e as WorktreeService.GitError {
-            worktreeDeleteError = e.message
-        } catch {
-            worktreeDeleteError = "\(error)"
+        let cardID = card.id
+        Task {
+            let outcome: Result<Void, WorktreeService.GitError> = await Task.detached(priority: .userInitiated) {
+                do {
+                    try WorktreeService.removeSafely(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+                    return .success(())
+                } catch let e as WorktreeService.GitError {
+                    return .failure(e)
+                } catch {
+                    return .failure(WorktreeService.GitError(message: "\(error)"))
+                }
+            }.value
+            worktreeBusy = false
+            // await の間にカードが削除されていたら、これ以上 SwiftData には触れない。
+            guard BoardStore(context: context).card(withID: cardID) != nil else { return }
+            switch outcome {
+            case .success:
+                do {
+                    try BoardStore(context: context).clearWorktree(card)
+                    deleteCard()
+                } catch {
+                    worktreeDeleteError = "\(error)"
+                }
+            case .failure(let e):
+                worktreeDeleteError = e.message
+            }
         }
     }
 

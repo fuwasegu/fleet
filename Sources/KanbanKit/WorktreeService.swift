@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WorktreeBase: Hashable { case current, defaultBranch }
+public enum WorktreeBase: Hashable, Sendable { case current, defaultBranch }
 
 public struct WorktreeService {
     public static func sanitizeBranch(_ raw: String) -> String {
@@ -21,7 +21,7 @@ public struct WorktreeService {
         return base.appendingPathComponent(sanitizeBranch(branch)).standardizedFileURL.path
     }
 
-    public enum RemovalRisk { case clean, dirty, unpushed, inUse }
+    public enum RemovalRisk: Sendable { case clean, dirty, unpushed, inUse }
 
     public static func classifyRemoval(porcelain: String, aheadCount: Int, mergedIntoDefault: Bool, inUse: Bool) -> RemovalRisk {
         if inUse { return .inUse }
@@ -32,8 +32,12 @@ public struct WorktreeService {
 }
 
 extension WorktreeService {
-    public struct GitError: Error {
+    public struct GitError: Error, Sendable {
         public let message: String
+
+        public init(message: String) {
+            self.message = message
+        }
     }
 
     private static func shellQuote(_ s: String) -> String {
