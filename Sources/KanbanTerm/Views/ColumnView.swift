@@ -40,7 +40,7 @@ struct ColumnView: View {
                 if let wtInfo {
                     // worktree 作成をカード作成より先に行う: git 失敗時に孤児カードを残さないため。
                     let path = try WorktreeService.create(
-                        repoRoot: wtInfo.repoRoot, branch: wtInfo.branch, base: wtInfo.base,
+                        repoRoot: wtInfo.repoRoot, branch: wtInfo.branch, baseRef: wtInfo.baseRef,
                         baseDir: "../.fleet-worktrees"
                     )
                     let card = try store.addCard(

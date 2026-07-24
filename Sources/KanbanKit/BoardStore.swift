@@ -340,8 +340,9 @@ public struct BoardStore {
             return WorktreeResult(id: intent.id, ok: false, error: "not a git repository: \(cwd)")
         }
         let base: WorktreeBase = intent.base == "default" ? .defaultBranch : .current
+        let baseRef = WorktreeService.resolveBase(base, repoRoot: repoRoot)
         do {
-            let path = try WorktreeService.create(repoRoot: repoRoot, branch: intent.branch, base: base, baseDir: "../.fleet-worktrees")
+            let path = try WorktreeService.create(repoRoot: repoRoot, branch: intent.branch, baseRef: baseRef, baseDir: "../.fleet-worktrees")
             try setWorktree(card, repoRoot: repoRoot, worktreePath: path,
                             branch: WorktreeService.sanitizeBranch(intent.branch), fleetOwned: true)
             return WorktreeResult(id: intent.id, ok: true, path: path)

@@ -102,7 +102,26 @@ extension WorktreeService {
         return !out.isEmpty
     }
 
-    public static func create(repoRoot: String, branch: String, base: WorktreeBase, baseDir: String) throws -> String {
+    /// ローカルブランチの短縮名一覧。git リポジトリでない場合は `[]`。
+    public static func branches(repoRoot: String) -> [String] {
+        (try? run(["branch", "--format=%(refname:short)"], in: repoRoot))?
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty } ?? []
+    }
+
+    /// `WorktreeBase` (current|default) を具体的な ref 文字列へ解決する。
+    /// MCP intent 経路 (`base` フィールドが "current"/"default" の2値のみ) で使用する。
+    public static func resolveBase(_ base: WorktreeBase, repoRoot: String) -> String {
+        switch base {
+        case .current:
+            return currentBranch(repoRoot: repoRoot) ?? ((try? run(["rev-parse", "HEAD"], in: repoRoot)) ?? "HEAD")
+        case .defaultBranch:
+            return defaultBranch(repoRoot: repoRoot)
+        }
+    }
+
+    public static func create(repoRoot: String, branch: String, baseRef: String, baseDir: String) throws -> String {
         let b = sanitizeBranch(branch)
         if branchExists(repoRoot: repoRoot, branch: b) {
             throw GitError(message: "branch '\(b)' は既に存在します。別名にしてください。")
@@ -110,13 +129,6 @@ extension WorktreeService {
         let path = worktreePath(repoRoot: repoRoot, branch: b, baseDir: baseDir)
         if FileManager.default.fileExists(atPath: path) {
             throw GitError(message: "配置先が既に存在します: \(path)")
-        }
-        let baseRef: String
-        switch base {
-        case .current:
-            baseRef = (try? run(["rev-parse", "--abbrev-ref", "HEAD"], in: repoRoot)) ?? "HEAD"
-        case .defaultBranch:
-            baseRef = defaultBranch(repoRoot: repoRoot)
         }
         try run(["worktree", "add", "-b", b, path, baseRef], in: repoRoot)
         return path
