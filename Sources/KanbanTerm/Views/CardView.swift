@@ -209,7 +209,7 @@ struct CardFace: View {
 
     /// cwd の末尾ディレクトリ名(プロンプトのカレント表示)。
     private var dirName: String {
-        guard let p = card.workingDirPath, !p.isEmpty else { return "~" }
+        guard let p = card.effectiveCwd, !p.isEmpty else { return "~" }
         let last = (p as NSString).lastPathComponent
         return last.isEmpty ? "~" : last
     }
@@ -272,7 +272,7 @@ extension Card {
     /// プロンプト行ホバー時の tooltip 本文: cwd フルパス + ブランチ全文 + PR URL(各1行)。
     var promptTooltipText: String {
         var lines: [String] = []
-        if let p = workingDirPath, !p.isEmpty { lines.append(p) }
+        if let p = effectiveCwd, !p.isEmpty { lines.append(p) }
         if let b = branch { lines.append("⎇ \(b)") }
         if let pr = prURL, !pr.isEmpty { lines.append(pr) }
         return lines.joined(separator: "\n")
@@ -334,7 +334,7 @@ struct PromptTooltip: View {
 
     /// cwd: 親パスを muted、末尾ディレクトリを強調。
     @ViewBuilder private var cwdText: some View {
-        let full = card.workingDirPath ?? ""
+        let full = card.effectiveCwd ?? ""
         let base = (full as NSString).lastPathComponent
         let parent = (full as NSString).deletingLastPathComponent
         (
