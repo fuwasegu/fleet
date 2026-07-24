@@ -313,13 +313,12 @@ public struct BoardStore {
         let intents = ChannelStore.worktreeIntents(for: channelID)
         guard !intents.isEmpty else { return }
         var applied = ChannelStore.appliedWorktreeIntentIDs(for: channelID)
-        var didApply = false
         for intent in intents where !applied.contains(intent.id) {
-            applied.insert(intent.id); didApply = true
             let result = performWorktreeIntent(intent)
             ChannelStore.writeWorktreeResult(result, for: channelID)
+            applied.insert(intent.id)
+            ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID)
         }
-        if didApply { ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID) }
     }
 
     private func performWorktreeIntent(_ intent: WorktreeIntent) -> WorktreeResult {

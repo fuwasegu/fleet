@@ -15,8 +15,13 @@ struct WorktreeIntentApplyTests {
         return BoardStore(context: ModelContext(container))
     }
 
+    /// `performWorktreeIntent` は baseDir に相対パス "../.fleet-worktrees" を固定で使う
+    /// (BoardStore.swift)。つまり worktree の実体は repo の「親ディレクトリ」配下に置かれる。
+    /// そのため repo をテストごとに一意な親ルート配下の子ディレクトリとして作ることで、
+    /// worktree の置き場所ごとテスト間で衝突しないようにする。
     private func tmpRepo() throws -> String {
-        let dir = NSTemporaryDirectory() + "wt-intent-test-" + UUID().uuidString
+        let root = NSTemporaryDirectory() + "wt-intent-test-" + UUID().uuidString
+        let dir = root + "/repo"
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         _ = try WorktreeService.run(["init", "-b", "main"], in: dir)
         _ = try WorktreeService.run(["config", "user.email", "t@t"], in: dir)
@@ -25,6 +30,14 @@ struct WorktreeIntentApplyTests {
         _ = try WorktreeService.run(["add", "."], in: dir)
         _ = try WorktreeService.run(["commit", "-m", "init"], in: dir)
         return dir
+    }
+
+    /// テストが作った一意な親ルート(tmpRepo が返す repo の親)を丸ごと削除する。
+    /// worktree ("../.fleet-worktrees") は repo の親配下に作られるため、これで
+    /// repo 本体・worktree・ブランチ情報がまとめて消える。
+    private func removeTestRoot(forRepo repo: String) {
+        let root = (repo as NSString).deletingLastPathComponent
+        try? FileManager.default.removeItem(atPath: root)
     }
 
     @Test func applyWorktreeIntentCreatesAndBinds() throws {
@@ -38,8 +51,7 @@ struct WorktreeIntentApplyTests {
             ChannelStore.removeBinding(cardID: a.id)
             ChannelStore.removeBinding(cardID: b.id)
             ChannelStore.removeDir(for: ch.id)
-            if let wt = a.worktreePath { try? FileManager.default.removeItem(atPath: (wt as NSString).deletingLastPathComponent) }
-            try? FileManager.default.removeItem(atPath: repo)
+            removeTestRoot(forRepo: repo)
         }
 
         let intent = WorktreeIntent(fromCardID: a.id.uuidString, branch: "feat/from-agent", base: "current")
@@ -76,7 +88,7 @@ struct WorktreeIntentApplyTests {
             ChannelStore.removeBinding(cardID: a.id)
             ChannelStore.removeBinding(cardID: b.id)
             ChannelStore.removeDir(for: ch.id)
-            try? FileManager.default.removeItem(atPath: repo)
+            removeTestRoot(forRepo: repo)
         }
         try store.setWorktree(a, repoRoot: repo, worktreePath: repo + "/already-bound", branch: "existing", fleetOwned: true)
 

@@ -17,7 +17,8 @@ import Foundation
 
     @Test func createThenCleanRemove() throws {
         let repo = try tmpRepo()
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/x", base: .current, baseDir: "../.fleet-worktrees")
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/x", base: .current, baseDir: ".fleet-worktrees")
         #expect(FileManager.default.fileExists(atPath: path))
         // clean なので撤去できる
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .clean)
@@ -27,7 +28,8 @@ import Foundation
 
     @Test func dirtyBlocksRemoval() throws {
         let repo = try tmpRepo()
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/y", base: .current, baseDir: "../.fleet-worktrees")
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/y", base: .current, baseDir: ".fleet-worktrees")
         FileManager.default.createFile(atPath: path + "/dirty.txt", contents: Data("x".utf8))
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
         #expect(throws: WorktreeService.GitError.self) {
@@ -41,7 +43,8 @@ import Foundation
     /// removalRisk が "" (クリーン) にフォールバックせず .dirty を返す(= 撤去をブロックする)ことを確認する。
     @Test func statusFailureBlocksRemoval() throws {
         let repo = try tmpRepo()
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/lockcheck", base: .current, baseDir: "../.fleet-worktrees")
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/lockcheck", base: .current, baseDir: ".fleet-worktrees")
 
         // worktree の gitdir (.git/worktrees/<name>/index) のパーミッションを剥奪し、
         // git status --porcelain を確実に失敗させる。
@@ -64,9 +67,10 @@ import Foundation
 
     @Test func duplicateBranchRejected() throws {
         let repo = try tmpRepo()
-        _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: "../.fleet-worktrees")
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: ".fleet-worktrees")
         #expect(throws: WorktreeService.GitError.self) {
-            _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: "../.fleet-worktrees")
+            _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: ".fleet-worktrees")
         }
     }
 }
