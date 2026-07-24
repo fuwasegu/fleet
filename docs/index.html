@@ -212,8 +212,8 @@
 <script>
   (function () {
     var saved = localStorage.getItem('fleet-lang');
-    // 初期表示は常に英語。ユーザーがトグルで切り替えた設定(saved)のみ尊重する。
-    var lang = saved || 'en';
+    // 保存設定が最優先。無ければブラウザ言語が ja のときだけ日本語、それ以外(en 含む)は英語。
+    var lang = saved || (navigator.language && navigator.language.toLowerCase().startsWith('ja') ? 'ja' : 'en');
     function apply(l) {
       document.documentElement.classList.toggle('ja', l === 'ja');
       document.documentElement.setAttribute('lang', l);
