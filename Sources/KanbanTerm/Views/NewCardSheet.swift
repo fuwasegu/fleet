@@ -34,6 +34,8 @@ struct NewCardSheet: View {
     @State private var mode: Mode = .folder
     @State private var repoRoot: String?
     @State private var pickingRepo = false
+    @State private var repoCurrentBranch: String?
+    @State private var repoDefaultBranch: String?
     @State private var branchName = ""
     @State private var branchEditedByUser = false
     @State private var base: WorktreeBase = .current
@@ -115,6 +117,8 @@ struct NewCardSheet: View {
         .fileImporter(isPresented: $pickingRepo, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 repoRoot = url.path
+                repoCurrentBranch = WorktreeService.currentBranch(repoRoot: url.path)
+                repoDefaultBranch = WorktreeService.defaultBranch(repoRoot: url.path)
             }
         }
         .onAppear {
@@ -163,6 +167,17 @@ struct NewCardSheet: View {
                     Spacer()
                     Button("選択…") { pickingRepo = true }
                 }
+                if repoRoot != nil {
+                    if let repoCurrentBranch {
+                        Text("現在のブランチ: \(repoCurrentBranch)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("git リポジトリではありません")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -175,12 +190,21 @@ struct NewCardSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("ベース").font(.caption).foregroundStyle(.secondary)
                 Picker("ベース", selection: $base) {
-                    Text("現在のブランチ").tag(WorktreeBase.current)
-                    Text("デフォルトブランチ").tag(WorktreeBase.defaultBranch)
+                    Text(baseLabel(.current)).tag(WorktreeBase.current)
+                    Text(baseLabel(.defaultBranch)).tag(WorktreeBase.defaultBranch)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
+        }
+    }
+
+    private func baseLabel(_ b: WorktreeBase) -> String {
+        switch b {
+        case .current:
+            return repoCurrentBranch.map { "現在のブランチ (\($0))" } ?? "現在のブランチ"
+        case .defaultBranch:
+            return repoDefaultBranch.map { "デフォルトブランチ (\($0))" } ?? "デフォルトブランチ"
         }
     }
 

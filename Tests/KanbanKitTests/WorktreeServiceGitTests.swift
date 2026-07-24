@@ -65,6 +65,19 @@ import Foundation
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
     }
 
+    @Test func currentBranchReturnsInitialBranch() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        #expect(WorktreeService.currentBranch(repoRoot: repo) == "main")
+    }
+
+    @Test func currentBranchNilForNonGitDir() throws {
+        let dir = NSTemporaryDirectory() + "wt-test-nogit-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        #expect(WorktreeService.currentBranch(repoRoot: dir) == nil)
+    }
+
     @Test func duplicateBranchRejected() throws {
         let repo = try tmpRepo()
         defer { try? FileManager.default.removeItem(atPath: repo) }

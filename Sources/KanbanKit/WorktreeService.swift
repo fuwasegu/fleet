@@ -88,6 +88,12 @@ extension WorktreeService {
         return "main"
     }
 
+    /// リポジトリの現在のブランチ名。detached HEAD やそもそも git リポジトリでない場合は nil。
+    public static func currentBranch(repoRoot: String) -> String? {
+        guard let b = try? run(["rev-parse", "--abbrev-ref", "HEAD"], in: repoRoot), !b.isEmpty, b != "HEAD" else { return nil }
+        return b
+    }
+
     /// `refs/heads/<branch>` が存在するかどうか。存在しなければ `run` が非0終了で throw するのでそれを catch して false。
     public static func branchExists(repoRoot: String, branch: String) -> Bool {
         guard let out = try? run(["rev-parse", "--verify", "--quiet", "refs/heads/" + branch], in: repoRoot) else {
