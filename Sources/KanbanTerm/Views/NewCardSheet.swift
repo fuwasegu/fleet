@@ -3,16 +3,18 @@ import UniformTypeIdentifiers
 import KanbanKit
 
 /// カード新規作成ショートカット: 作業ディレクトリをGUIで選び、Agent種別/自動起動/危険モードを選ぶ。
-/// 「worktree を作る」モードでは、リポジトリ・ブランチ名・ベースを選んで
-/// Fleet 管理 worktree を新規作成し、そこにカードを紐づけることもできる。
+/// フォルダ選択は1つだけで、「Git worktree を作成」トグルは選んだフォルダが git リポジトリの
+/// 場合にのみ有効になるオプションとして重ねる(排他的なタブではない)。トグルON時は
+/// ベースブランチ(リポジトリのローカルブランチ一覧から選択)と新ブランチ名を指定し、
+/// Fleet 管理 worktree を新規作成してそこにカードを紐づける。
 struct NewCardSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    /// worktree モードで作成するときの入力値。
+    /// worktree を作成してカードを紐づけるときの入力値。
     struct WorktreeCreationInfo {
         let repoRoot: String
         let branch: String
-        let base: WorktreeBase
+        let baseRef: String
     }
 
     /// (title, workingDirPath?, autoStartAgent, dangerSkip, agentKind, worktreeInfo?)
@@ -20,58 +22,47 @@ struct NewCardSheet: View {
     /// シートの `wtError` に反映させ、シートを閉じない。
     let onCreate: (String, String?, Bool, Bool, AgentKind, WorktreeCreationInfo?) throws -> Void
 
-    enum Mode: String, CaseIterable {
-        case folder = "既存フォルダ"
-        case worktree = "worktree を作る"
-    }
-
     @State private var title = ""
     @State private var directory: String?
     @State private var picking = false
     @State private var danger = false
     @State private var kind: AgentKind = .claude
 
-    @State private var mode: Mode = .folder
-    @State private var repoRoot: String?
-    @State private var pickingRepo = false
+    @State private var repoCurrentBranch: String?
+    @State private var branchList: [String] = []
+    @State private var makeWorktree = false
+    @State private var baseBranch: String = ""
     @State private var branchName = ""
     @State private var branchEditedByUser = false
-    @State private var base: WorktreeBase = .current
     @State private var wtError: String?
+
+    private var isGitRepo: Bool { repoCurrentBranch != nil }
 
     private var resolvedTitle: String {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
-        if mode == .worktree {
-            return repoRoot.map { ($0 as NSString).lastPathComponent } ?? ""
-        }
         if let dir = directory { return (dir as NSString).lastPathComponent }
         return ""
     }
 
     private var canCreate: Bool {
         guard !resolvedTitle.isEmpty else { return false }
-        if mode == .worktree {
-            return repoRoot != nil && !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if makeWorktree {
+            return directory != nil && isGitRepo && !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return true
+    }
+
+    private var predictedWorktreePath: String {
+        guard let directory else { return "" }
+        return WorktreeService.worktreePath(repoRoot: directory, branch: branchName, baseDir: "../.fleet-worktrees")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("新しいカード").font(.headline)
 
-            Picker("", selection: $mode) {
-                ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            if mode == .folder {
-                folderFields
-            } else {
-                worktreeFields
-            }
+            directoryFields
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("タイトル").font(.caption).foregroundStyle(.secondary)
@@ -110,11 +101,12 @@ struct NewCardSheet: View {
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 directory = url.path
-            }
-        }
-        .fileImporter(isPresented: $pickingRepo, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result {
-                repoRoot = url.path
+                repoCurrentBranch = WorktreeService.currentBranch(repoRoot: url.path)
+                branchList = WorktreeService.branches(repoRoot: url.path)
+                baseBranch = repoCurrentBranch ?? (branchList.first ?? "")
+                if repoCurrentBranch == nil {
+                    makeWorktree = false
+                }
             }
         }
         .onAppear {
@@ -129,57 +121,60 @@ struct NewCardSheet: View {
     }
 
     private var titlePlaceholder: String {
-        if mode == .worktree {
-            return repoRoot.map { ($0 as NSString).lastPathComponent } ?? String(localized: "タイトル")
-        }
-        return directory.map { ($0 as NSString).lastPathComponent } ?? String(localized: "タイトル")
+        directory.map { ($0 as NSString).lastPathComponent } ?? String(localized: "タイトル")
     }
 
-    private var folderFields: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("作業ディレクトリ").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                (directory.map(Text.init) ?? Text("未選択"))
-                    .font(.callout)
-                    .foregroundStyle(directory == nil ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer()
-                Button("選択…") { picking = true }
-            }
-        }
-    }
-
-    private var worktreeFields: some View {
+    private var directoryFields: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("リポジトリ").font(.caption).foregroundStyle(.secondary)
+                Text("作業ディレクトリ").font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    (repoRoot.map(Text.init) ?? Text("未選択"))
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+                    (directory.map(Text.init) ?? Text("フォルダを選択"))
                         .font(.callout)
-                        .foregroundStyle(repoRoot == nil ? .secondary : .primary)
+                        .foregroundStyle(directory == nil ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.head)
                     Spacer()
-                    Button("選択…") { pickingRepo = true }
+                    Button("選択…") { picking = true }
+                }
+                if let repoCurrentBranch {
+                    Text("現在: \(repoCurrentBranch)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("ブランチ名").font(.caption).foregroundStyle(.secondary)
-                TextField("ブランチ名", text: $branchName)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: branchName) { _, _ in branchEditedByUser = true }
-            }
+            Toggle("Git worktree を作成", isOn: $makeWorktree)
+                .disabled(!isGitRepo)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("ベース").font(.caption).foregroundStyle(.secondary)
-                Picker("ベース", selection: $base) {
-                    Text("現在のブランチ").tag(WorktreeBase.current)
-                    Text("デフォルトブランチ").tag(WorktreeBase.defaultBranch)
+            if makeWorktree && isGitRepo {
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("ベース").font(.caption).foregroundStyle(.secondary)
+                        Picker("ベース", selection: $baseBranch) {
+                            ForEach(branchList, id: \.self) { branch in
+                                Text(branch).tag(branch)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("新ブランチ名").font(.caption).foregroundStyle(.secondary)
+                        TextField("新ブランチ名", text: $branchName)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: branchName) { _, _ in branchEditedByUser = true }
+                    }
+
+                    Text("→ \(predictedWorktreePath)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                .padding(.leading, 20)
             }
         }
     }
@@ -187,8 +182,8 @@ struct NewCardSheet: View {
     private func create() {
         wtError = nil
         let info: WorktreeCreationInfo?
-        if mode == .worktree, let repo = repoRoot {
-            info = WorktreeCreationInfo(repoRoot: repo, branch: branchName, base: base)
+        if makeWorktree, let dir = directory, isGitRepo {
+            info = WorktreeCreationInfo(repoRoot: dir, branch: branchName, baseRef: baseBranch)
         } else {
             info = nil
         }

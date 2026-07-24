@@ -18,7 +18,7 @@ import Foundation
     @Test func createThenCleanRemove() throws {
         let repo = try tmpRepo()
         defer { try? FileManager.default.removeItem(atPath: repo) }
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/x", base: .current, baseDir: ".fleet-worktrees")
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/x", baseRef: "main", baseDir: ".fleet-worktrees")
         #expect(FileManager.default.fileExists(atPath: path))
         // clean なので撤去できる
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .clean)
@@ -29,7 +29,7 @@ import Foundation
     @Test func dirtyBlocksRemoval() throws {
         let repo = try tmpRepo()
         defer { try? FileManager.default.removeItem(atPath: repo) }
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/y", base: .current, baseDir: ".fleet-worktrees")
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/y", baseRef: "main", baseDir: ".fleet-worktrees")
         FileManager.default.createFile(atPath: path + "/dirty.txt", contents: Data("x".utf8))
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
         #expect(throws: WorktreeService.GitError.self) {
@@ -44,7 +44,7 @@ import Foundation
     @Test func statusFailureBlocksRemoval() throws {
         let repo = try tmpRepo()
         defer { try? FileManager.default.removeItem(atPath: repo) }
-        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/lockcheck", base: .current, baseDir: ".fleet-worktrees")
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/lockcheck", baseRef: "main", baseDir: ".fleet-worktrees")
 
         // worktree の gitdir (.git/worktrees/<name>/index) のパーミッションを剥奪し、
         // git status --porcelain を確実に失敗させる。
@@ -65,12 +65,38 @@ import Foundation
         #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
     }
 
+    @Test func currentBranchReturnsInitialBranch() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        #expect(WorktreeService.currentBranch(repoRoot: repo) == "main")
+    }
+
+    @Test func currentBranchNilForNonGitDir() throws {
+        let dir = NSTemporaryDirectory() + "wt-test-nogit-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        #expect(WorktreeService.currentBranch(repoRoot: dir) == nil)
+    }
+
+    @Test func branchesListsLocalBranchesForGitDir() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        #expect(WorktreeService.branches(repoRoot: repo) == ["main"])
+    }
+
+    @Test func branchesEmptyForNonGitDir() throws {
+        let dir = NSTemporaryDirectory() + "wt-test-nogit-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        #expect(WorktreeService.branches(repoRoot: dir) == [])
+    }
+
     @Test func duplicateBranchRejected() throws {
         let repo = try tmpRepo()
         defer { try? FileManager.default.removeItem(atPath: repo) }
-        _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: ".fleet-worktrees")
+        _ = try WorktreeService.create(repoRoot: repo, branch: "dup", baseRef: "main", baseDir: ".fleet-worktrees")
         #expect(throws: WorktreeService.GitError.self) {
-            _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: ".fleet-worktrees")
+            _ = try WorktreeService.create(repoRoot: repo, branch: "dup", baseRef: "main", baseDir: ".fleet-worktrees")
         }
     }
 }
