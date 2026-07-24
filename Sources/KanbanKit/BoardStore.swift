@@ -333,62 +333,157 @@ public struct BoardStore {
         if didApply { ChannelStore.writeAppliedIntentIDs(applied, for: channelID) }
     }
 
-    /// Agent の worktree 作成 intent(worktree-intents.jsonl)を適用する。
+    /// Agent の worktree 作成 intent(worktree-intents.jsonl)を適用する(同期版)。
     /// 検証済みの WorktreeService.create を単一の git 実行経路として使い、成功したら
     /// カードを Fleet 管理 worktree へ再バインドする(setWorktree)。適用済み id は
     /// board intent と同じ「applied 集合」パターンで記録し、成否に関わらず再適用しない
     /// (二重 create による重複エラー/二重バインドを防ぐ)。
+    ///
+    /// git 呼び出しを含むため MainActor 上で数秒ブロックしうる。UI から常駐監視で呼ぶ経路
+    /// (A2AChannelHub)は必ず `applyWorktreeIntentsAsync` を使うこと。この同期版はテスト、
+    /// および MainActor をブロックしても問題ない呼び出し元専用に残す。
     public func applyWorktreeIntents(for channelID: UUID) {
         let intents = ChannelStore.worktreeIntents(for: channelID)
         guard !intents.isEmpty else { return }
         var applied = ChannelStore.appliedWorktreeIntentIDs(for: channelID)
         for intent in intents where !applied.contains(intent.id) {
-            let result = performWorktreeIntent(intent, channelID: channelID)
+            let result: WorktreeResult
+            switch validateWorktreeIntent(intent, channelID: channelID) {
+            case .failure(let r):
+                result = r
+            case .ok(let fromUUID, let cwd, let existingRepoRoot):
+                let gitOutcome = Self.performWorktreeGit(
+                    cwd: cwd, existingRepoRoot: existingRepoRoot,
+                    branch: intent.branch, base: Self.base(for: intent)
+                )
+                result = finishWorktreeIntent(intent, fromUUID: fromUUID, gitOutcome: gitOutcome)
+            }
             ChannelStore.writeWorktreeResult(result, for: channelID)
             applied.insert(intent.id)
             ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID)
         }
     }
 
+    /// Agent の worktree 作成 intent を非同期に適用する(git 呼び出しを MainActor 外の
+    /// `Task.detached` で実行し、UI フリーズを避ける)。手順は per-intent で:
+    /// (1) MainActor 上で intent を検証し、必要な値(cwd/repoRoot 等、すべて値型)を取り出す。
+    /// (2) git 呼び出しは `Task.detached` へ(SwiftData オブジェクトは一切キャプチャしない)。
+    /// (3) await から戻ったら MainActor でカードを再取得し直し(await 中に削除される可能性が
+    ///     あるため)、setWorktree で SwiftData へバインドし、結果ファイルを書く。
+    /// 適用済み id の記録は同期版と同じ「applied 集合」パターンで、成否に関わらず1度だけ適用する。
+    public func applyWorktreeIntentsAsync(for channelID: UUID) async {
+        let intents = ChannelStore.worktreeIntents(for: channelID)
+        guard !intents.isEmpty else { return }
+        var applied = ChannelStore.appliedWorktreeIntentIDs(for: channelID)
+        for intent in intents where !applied.contains(intent.id) {
+            let result: WorktreeResult
+            switch validateWorktreeIntent(intent, channelID: channelID) {
+            case .failure(let r):
+                result = r
+            case .ok(let fromUUID, let cwd, let existingRepoRoot):
+                let branch = intent.branch
+                let base = Self.base(for: intent)
+                // git 呼び出しのみを MainActor 外へ退避する。渡すのは String/enum の値型のみ。
+                let gitOutcome = await Task.detached(priority: .userInitiated) {
+                    Self.performWorktreeGit(cwd: cwd, existingRepoRoot: existingRepoRoot, branch: branch, base: base)
+                }.value
+                result = finishWorktreeIntent(intent, fromUUID: fromUUID, gitOutcome: gitOutcome)
+            }
+            ChannelStore.writeWorktreeResult(result, for: channelID)
+            applied.insert(intent.id)
+            ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID)
+        }
+    }
+
+    private static func base(for intent: WorktreeIntent) -> WorktreeBase {
+        intent.base == "default" ? .defaultBranch : .current
+    }
+
+    private enum WorktreeIntentValidation {
+        /// `fromUUID` = 検証済みの発行元カード id、`cwd` = そのカードの実効 cwd、
+        /// `existingRepoRoot` = カードに既に紐づいている repoRoot(あれば再利用する)。
+        case ok(fromUUID: UUID, cwd: String, existingRepoRoot: String?)
+        case failure(WorktreeResult)
+    }
+
     /// `intent.fromCardID` は必ず `channelID` に所属するカードでなければならない
     /// (board intent の move/create と同じく `ch.cards` でスコープする)。所属チェックを
     /// 外すと、あるチャンネルで偽装した intent が無関係カードの worktree を作成/再バインド
-    /// できてしまう。
-    private func performWorktreeIntent(_ intent: WorktreeIntent, channelID: UUID) -> WorktreeResult {
+    /// できてしまう。SwiftData の読み取りのみで、git には触れない(MainActor 上で完結)。
+    private func validateWorktreeIntent(_ intent: WorktreeIntent, channelID: UUID) -> WorktreeIntentValidation {
         guard let ch = channel(withID: channelID) else {
-            return WorktreeResult(id: intent.id, ok: false, error: "channel not found")
+            return .failure(WorktreeResult(id: intent.id, ok: false, error: "channel not found"))
         }
         guard let fromUUID = UUID(uuidString: intent.fromCardID), let card = card(withID: fromUUID) else {
-            return WorktreeResult(id: intent.id, ok: false, error: "card not found")
+            return .failure(WorktreeResult(id: intent.id, ok: false, error: "card not found"))
         }
         guard ch.cards.contains(where: { $0.id == fromUUID }) else {
-            return WorktreeResult(id: intent.id, ok: false, error: "card is not a member of this channel")
+            return .failure(WorktreeResult(id: intent.id, ok: false, error: "card is not a member of this channel"))
         }
         if card.isFleetOwnedWorktree, card.worktreePath != nil {
-            return WorktreeResult(id: intent.id, ok: false, error: "this card already has a Fleet-managed worktree")
+            return .failure(WorktreeResult(id: intent.id, ok: false, error: "this card already has a Fleet-managed worktree"))
         }
         guard let cwd = card.effectiveCwd else {
-            return WorktreeResult(id: intent.id, ok: false, error: "card has no working directory; not a git repository")
+            return .failure(WorktreeResult(id: intent.id, ok: false, error: "card has no working directory; not a git repository"))
         }
-        let repoRoot: String
-        if let r = card.repoRoot {
-            repoRoot = r
-        } else if let r = try? WorktreeService.run(["rev-parse", "--show-toplevel"], in: cwd), !r.isEmpty {
-            repoRoot = r
-        } else {
-            return WorktreeResult(id: intent.id, ok: false, error: "not a git repository: \(cwd)")
-        }
-        let base: WorktreeBase = intent.base == "default" ? .defaultBranch : .current
-        let baseRef = WorktreeService.resolveBase(base, repoRoot: repoRoot)
+        return .ok(fromUUID: fromUUID, cwd: cwd, existingRepoRoot: card.repoRoot)
+    }
+
+    /// nonisolated: 純粋な git 操作のみ(repoRoot 解決 + worktree create)。SwiftData には
+    /// 一切触れないので、MainActor の内外どちらから呼んでも(sync 版はそのまま、async 版は
+    /// `Task.detached` の中から)安全。引数・戻り値はすべて値型 (String/enum/Result)。
+    private nonisolated static func performWorktreeGit(
+        cwd: String, existingRepoRoot: String?, branch: String, base: WorktreeBase
+    ) -> Result<(repoRoot: String, path: String), WorktreeService.GitError> {
         do {
-            let path = try WorktreeService.create(repoRoot: repoRoot, branch: intent.branch, baseRef: baseRef, baseDir: "../.fleet-worktrees")
-            try setWorktree(card, repoRoot: repoRoot, worktreePath: path,
-                            branch: WorktreeService.sanitizeBranch(intent.branch), fleetOwned: true)
-            return WorktreeResult(id: intent.id, ok: true, path: path)
+            let repoRoot: String
+            if let r = existingRepoRoot {
+                repoRoot = r
+            } else if let r = try? WorktreeService.run(["rev-parse", "--show-toplevel"], in: cwd), !r.isEmpty {
+                repoRoot = r
+            } else {
+                return .failure(WorktreeService.GitError(message: "not a git repository: \(cwd)"))
+            }
+            let baseRef = WorktreeService.resolveBase(base, repoRoot: repoRoot)
+            let path = try WorktreeService.create(repoRoot: repoRoot, branch: branch, baseRef: baseRef, baseDir: "../.fleet-worktrees")
+            return .success((repoRoot, path))
         } catch let e as WorktreeService.GitError {
-            return WorktreeResult(id: intent.id, ok: false, error: e.message)
+            return .failure(e)
         } catch {
-            return WorktreeResult(id: intent.id, ok: false, error: "\(error)")
+            return .failure(WorktreeService.GitError(message: "\(error)"))
+        }
+    }
+
+    /// git 結果を受けてカードを再バインドする仕上げ処理。同期版・async 版どちらからも呼ぶ。
+    /// カードは id で再取得する(同期版では検証直後なので実質同一だが、async 版では `await` の
+    /// 間にカードが削除/変更されている可能性があるため、事前に保持した `Card` 参照は使わず
+    /// 必ずここで取り直す)。
+    private func finishWorktreeIntent(
+        _ intent: WorktreeIntent, fromUUID: UUID,
+        gitOutcome: Result<(repoRoot: String, path: String), WorktreeService.GitError>
+    ) -> WorktreeResult {
+        switch gitOutcome {
+        case .failure(let e):
+            return WorktreeResult(id: intent.id, ok: false, error: e.message)
+        case .success(let (repoRoot, path)):
+            guard let card = card(withID: fromUUID) else {
+                // await 中にカードが削除された。worktree はディスク上に作られてしまっているが、
+                // バインド先が無いので安全側に倒してエラーとして報告する(孤児 worktree はユーザーが
+                // 「ターミナルを開いて手動で処理」等で発見できるよう、パスをメッセージに残す)。
+                return WorktreeResult(id: intent.id, ok: false, error: "card was removed while creating worktree: \(path)")
+            }
+            if card.isFleetOwnedWorktree, card.worktreePath != nil {
+                // await 中に別経路で既にバインドされた(理論上は per-channel in-flight ガードで
+                // 起こらないはずだが、fail-closed で二重バインドを防ぐ)。
+                return WorktreeResult(id: intent.id, ok: false, error: "this card already has a Fleet-managed worktree")
+            }
+            do {
+                try setWorktree(card, repoRoot: repoRoot, worktreePath: path,
+                                branch: WorktreeService.sanitizeBranch(intent.branch), fleetOwned: true)
+                return WorktreeResult(id: intent.id, ok: true, path: path)
+            } catch {
+                return WorktreeResult(id: intent.id, ok: false, error: "\(error)")
+            }
         }
     }
 
