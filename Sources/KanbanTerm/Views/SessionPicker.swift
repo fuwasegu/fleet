@@ -35,6 +35,22 @@ enum ClaudeSessionsService {
         return FileManager.default.fileExists(atPath: path)
     }
 
+    /// `~/.claude/projects/` 配下の「どの project ディレクトリでもいいから」このセッション id の
+    /// jsonl があるか。`claude --resume <uuid>` は cwd に関係なく id だけで解決できるため、
+    /// worktree カード(cwd がその都度変わる)の自動復帰判定はこちらを使う。
+    /// (元 repo の cwd で作られたセッションを、worktree の cwd から見て「無い」と誤判定しないため。)
+    static func sessionExistsAnywhere(id: String) -> Bool {
+        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+        let fm = FileManager.default
+        guard let projectDirs = try? fm.contentsOfDirectory(atPath: base) else { return false }
+        for projectDir in projectDirs {
+            let dir = (base as NSString).appendingPathComponent(projectDir)
+            let path = (dir as NSString).appendingPathComponent("\(id).jsonl")
+            if fm.fileExists(atPath: path) { return true }
+        }
+        return false
+    }
+
     static func list(forCwd cwd: String, limit: Int = 40) -> [ClaudeSession] {
         let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
         let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
@@ -118,9 +134,13 @@ enum ClaudeSessionsService {
 }
 
 /// 過去セッションを選んで復帰するシート。左=一覧 / 右=選択セッションの直近会話プレビュー。
+/// `cwds` は列挙する project ディレクトリ群(worktree カードなら worktree 本体 + 元 repo の2つ、
+/// フォルダカードなら1つ)。session id で重複排除し、更新日時降順にまとめて一覧表示する。
 struct SessionPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let cwd: String?
+    /// 列挙する project ディレクトリ群。フォルダカードは effectiveCwd 1件のみ、
+    /// worktree カードは呼び出し側(CardView)が [effectiveCwd, repoRoot] を渡す。
+    let cwds: [String]
     let onPick: (String) -> Void
 
     @State private var sessions: [ClaudeSession] = []
@@ -149,10 +169,16 @@ struct SessionPickerSheet: View {
         }
         .frame(width: 780, height: 520)
         .task {
-            let dir = cwd
+            let dirs = cwds
             sessions = await Task.detached {
-                guard let dir else { return [] }
-                return ClaudeSessionsService.list(forCwd: dir)
+                var seen = Set<String>()
+                var merged: [ClaudeSession] = []
+                for dir in dirs {
+                    for s in ClaudeSessionsService.list(forCwd: dir) where seen.insert(s.id).inserted {
+                        merged.append(s)
+                    }
+                }
+                return merged.sorted { $0.modified > $1.modified }
             }.value
             loading = false
             if let first = sessions.first { select(first) }
@@ -163,9 +189,13 @@ struct SessionPickerSheet: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("セッションを再開").font(.headline)
-                if let cwd {
-                    Text(cwd).font(.system(.caption, design: .monospaced))
+                if let primary = cwds.first {
+                    Text(primary).font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                }
+                if cwds.count > 1 {
+                    Text("+ 元リポジトリのセッションも含む")
+                        .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             Spacer()
