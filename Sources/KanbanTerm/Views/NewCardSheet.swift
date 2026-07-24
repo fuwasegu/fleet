@@ -16,11 +16,12 @@ struct NewCardSheet: View {
     let store: BoardStore
     let column: BoardColumn
 
-    /// (title, workingDirPath?, autoStartAgent, dangerSkip, agentKind)
+    /// (title, workingDirPath?, autoStartAgent, dangerSkip, agentKind, claudeProfileID?)
     /// worktree を伴わない(フォルダ紐づけ or 何もなし)カード作成。同期・即座に完了するため
     /// スピナーは出さない。カード作成が失敗した場合は throw する。呼び出し側はエラーを
-    /// シートの `wtError` に反映させ、シートを閉じない。
-    let onCreate: (String, String?, Bool, Bool, AgentKind) throws -> Void
+    /// シートの `wtError` に反映させ、シートを閉じない。claudeProfileID は Claude Code 選択時に
+    /// ピッカーで選んだ `ClaudeProfile.id`(既定=nil)。
+    let onCreate: (String, String?, Bool, Bool, AgentKind, UUID?) throws -> Void
 
     @State private var title = ""
     @State private var directory: String?
@@ -38,6 +39,18 @@ struct NewCardSheet: View {
     /// worktree 作成 (git worktree add) が進行中かどうか。true の間はボタンを無効化し
     /// スピナーを表示する(git-lfs のチェックアウトが数秒かかりうるため)。
     @State private var creating = false
+
+    /// 選択中の Claude プロファイル(nil = 既定 `~/.claude`)。Claude Code 選択時のみ表示。
+    @State private var selectedProfileID: UUID?
+    @State private var profiles: [ClaudeProfile] = []
+    @State private var managingProfiles = false
+
+    private func reloadProfiles() {
+        profiles = (try? store.profiles()) ?? []
+        if let id = selectedProfileID, !profiles.contains(where: { $0.id == id }) {
+            selectedProfileID = nil   // 削除された場合は既定にフォールバック
+        }
+    }
 
     private var isGitRepo: Bool { repoCurrentBranch != nil }
 
@@ -80,6 +93,10 @@ struct NewCardSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+            }
+
+            if kind == .claude {
+                claudeProfileFields
             }
 
             // カードを開くと Agent は自動起動・自動復帰するので、起動トグルは廃止。
@@ -140,10 +157,33 @@ struct NewCardSheet: View {
             if branchName.isEmpty {
                 branchName = WorktreeService.sanitizeBranch(title)
             }
+            reloadProfiles()
         }
         .onChange(of: title) { _, newValue in
             guard !branchEditedByUser else { return }
             branchName = WorktreeService.sanitizeBranch(newValue)
+        }
+        .sheet(isPresented: $managingProfiles, onDismiss: reloadProfiles) {
+            ManageProfilesSheet(store: store)
+        }
+    }
+
+    private var claudeProfileFields: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Claude プロファイル").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("管理…") { managingProfiles = true }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+            Picker("Claude プロファイル", selection: $selectedProfileID) {
+                Text("既定 (~/.claude)").tag(UUID?.none)
+                ForEach(profiles) { profile in
+                    Text(profile.label).tag(Optional(profile.id))
+                }
+            }
+            .labelsHidden()
         }
     }
 
@@ -212,7 +252,8 @@ struct NewCardSheet: View {
             createWithWorktree(repoRoot: dir, branch: branchName, baseRef: baseBranch)
         } else {
             do {
-                try onCreate(resolvedTitle, directory, true, danger, kind)
+                try onCreate(resolvedTitle, directory, true, danger, kind,
+                              kind == .claude ? selectedProfileID : nil)
                 dismiss()
             } catch let error as WorktreeService.GitError {
                 wtError = error.message
@@ -233,6 +274,7 @@ struct NewCardSheet: View {
         let title = resolvedTitle
         let dangerSkip = danger
         let agentKind = kind
+        let profileID = agentKind == .claude ? selectedProfileID : nil
         Task {
             do {
                 let path = try await Task.detached(priority: .userInitiated) {
@@ -252,6 +294,9 @@ struct NewCardSheet: View {
                     card, repoRoot: repoRoot, worktreePath: path,
                     branch: WorktreeService.sanitizeBranch(branch), fleetOwned: true
                 )
+                if let profileID, let profile = try store.profiles().first(where: { $0.id == profileID }) {
+                    try store.setCardProfile(card, profile: profile)
+                }
                 creating = false
                 dismiss()
             } catch let error as WorktreeService.GitError {

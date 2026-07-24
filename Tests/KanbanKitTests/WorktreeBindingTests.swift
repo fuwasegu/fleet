@@ -7,7 +7,7 @@ struct WorktreeBindingTests {
 
     private func makeStore() throws -> BoardStore {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, configurations: config)
+        let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, ClaudeProfile.self, configurations: config)
         return BoardStore(context: ModelContext(container))
     }
 

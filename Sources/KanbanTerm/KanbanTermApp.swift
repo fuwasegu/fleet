@@ -19,7 +19,7 @@ struct KanbanTermApp: App {
 
     init() {
         do {
-            container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self)
+            container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, ClaudeProfile.self)
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }

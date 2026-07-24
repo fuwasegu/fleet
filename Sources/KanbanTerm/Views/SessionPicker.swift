@@ -26,21 +26,33 @@ enum ClaudeSessionsService {
             .replacingOccurrences(of: ".", with: "-")
     }
 
+    /// `~/.claude/projects` あるいは(プロファイル指定時)`<configDir>/projects` を返す。
+    /// カードに `ClaudeProfile` が割り当てられている場合、そのセッション履歴は
+    /// デフォルトの `~/.claude` ではなく `configDir` の下に生成される(`CLAUDE_CONFIG_DIR` 起動時)。
+    /// 解決を誤ると「実在するのに見つからない」→ `--session-id` を新規発行して
+    /// "already in use" になる不具合を再現するため、起動時の env と必ず同じ基準で解決する。
+    private static func projectsBase(configDir: String?) -> String {
+        if let configDir, !configDir.isEmpty {
+            return (configDir as NSString).expandingTildeInPath + "/projects"
+        }
+        return (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    }
+
     /// 指定 cwd の project ディレクトリに、このセッション id の jsonl が既にあるか。
     /// 自動復帰で「--resume(既存) か --session-id(新規) か」を決めるのに使う。
-    static func sessionExists(id: String, cwd: String) -> Bool {
-        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    static func sessionExists(id: String, cwd: String, configDir: String? = nil) -> Bool {
+        let base = projectsBase(configDir: configDir)
         let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
         let path = (dir as NSString).appendingPathComponent("\(id).jsonl")
         return FileManager.default.fileExists(atPath: path)
     }
 
-    /// `~/.claude/projects/` 配下の「どの project ディレクトリでもいいから」このセッション id の
-    /// jsonl があるか。`claude --resume <uuid>` は cwd に関係なく id だけで解決できるため、
-    /// worktree カード(cwd がその都度変わる)の自動復帰判定はこちらを使う。
+    /// `~/.claude/projects/`(または `configDir` 配下)の「どの project ディレクトリでもいいから」
+    /// このセッション id の jsonl があるか。`claude --resume <uuid>` は cwd に関係なく id だけで
+    /// 解決できるため、worktree カード(cwd がその都度変わる)の自動復帰判定はこちらを使う。
     /// (元 repo の cwd で作られたセッションを、worktree の cwd から見て「無い」と誤判定しないため。)
-    static func sessionExistsAnywhere(id: String) -> Bool {
-        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    static func sessionExistsAnywhere(id: String, configDir: String? = nil) -> Bool {
+        let base = projectsBase(configDir: configDir)
         let fm = FileManager.default
         guard let projectDirs = try? fm.contentsOfDirectory(atPath: base) else { return false }
         for projectDir in projectDirs {
@@ -51,8 +63,8 @@ enum ClaudeSessionsService {
         return false
     }
 
-    static func list(forCwd cwd: String, limit: Int = 40) -> [ClaudeSession] {
-        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    static func list(forCwd cwd: String, configDir: String? = nil, limit: Int = 40) -> [ClaudeSession] {
+        let base = projectsBase(configDir: configDir)
         let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
@@ -141,6 +153,8 @@ struct SessionPickerSheet: View {
     /// 列挙する project ディレクトリ群。フォルダカードは effectiveCwd 1件のみ、
     /// worktree カードは呼び出し側(CardView)が [effectiveCwd, repoRoot] を渡す。
     let cwds: [String]
+    /// カードに割り当てられた `ClaudeProfile.configDirPath`。nil/空ならデフォルトの `~/.claude`。
+    let configDir: String?
     let onPick: (String) -> Void
 
     @State private var sessions: [ClaudeSession] = []
@@ -170,11 +184,12 @@ struct SessionPickerSheet: View {
         .frame(width: 780, height: 520)
         .task {
             let dirs = cwds
+            let cfgDir = configDir
             sessions = await Task.detached {
                 var seen = Set<String>()
                 var merged: [ClaudeSession] = []
                 for dir in dirs {
-                    for s in ClaudeSessionsService.list(forCwd: dir) where seen.insert(s.id).inserted {
+                    for s in ClaudeSessionsService.list(forCwd: dir, configDir: cfgDir) where seen.insert(s.id).inserted {
                         merged.append(s)
                     }
                 }

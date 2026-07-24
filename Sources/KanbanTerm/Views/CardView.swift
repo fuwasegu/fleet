@@ -466,6 +466,30 @@ struct CardView: View {
                         Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
                     }
                     .disabled(card.effectiveCwd == nil)
+                    Menu {
+                        Button {
+                            try? BoardStore(context: context).setCardProfile(card, profile: nil)
+                        } label: {
+                            if card.claudeProfile == nil {
+                                Label("既定 (~/.claude)", systemImage: "checkmark")
+                            } else {
+                                Text("既定 (~/.claude)")
+                            }
+                        }
+                        ForEach((try? BoardStore(context: context).profiles()) ?? []) { profile in
+                            Button {
+                                try? BoardStore(context: context).setCardProfile(card, profile: profile)
+                            } label: {
+                                if card.claudeProfile?.id == profile.id {
+                                    Label(profile.label, systemImage: "checkmark")
+                                } else {
+                                    Text(profile.label)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Claude プロファイルを変更…", systemImage: "person.crop.circle")
+                    }
                 }
                 Divider()
                 Button(role: .destructive, action: beginDelete) {
@@ -487,7 +511,7 @@ struct CardView: View {
                     if let r = card.repoRoot, r != card.effectiveCwd { arr.append(r) }
                     return arr
                 }()
-                SessionPickerSheet(cwds: dirs) { sessionID in
+                SessionPickerSheet(cwds: dirs, configDir: card.claudeProfile?.configDirPath) { sessionID in
                     resumeSession(sessionID)
                 }
             }
