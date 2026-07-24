@@ -320,14 +320,9 @@ final class TerminalSessions {
         case .claude:
             // ピン留めセッション id を決める。履歴ピッカーで明示指定があればそれに再ピンし、
             // 無ければ既存のピン、それも無ければ新規 UUID を生成して保存。
-            let sid: String
-            if let explicit = validID(explicitResume) {
-                sid = explicit; card.claudeSessionID = explicit; try? context.save()
-            } else if let pinned = card.claudeSessionID {
-                sid = pinned
-            } else {
-                sid = UUID().uuidString; card.claudeSessionID = sid; try? context.save()
-            }
+            let explicit = validID(explicitResume)
+            let pinned = card.claudeSessionID
+            let freshID = UUID().uuidString
             // `claude --resume <uuid>` は cwd に関係なく id だけで解決できる。worktree カードは
             // cwd が元 repo と別物になるため、cwd 限定の存在チェックだと「元 repo で作った
             // ピン留め済みセッションが worktree の project ディレクトリには無い」と誤判定し、
@@ -338,19 +333,37 @@ final class TerminalSessions {
             // 存在チェックも起動 env(CLAUDE_CONFIG_DIR)と同じ configDir を基準にする
             // (基準がずれると "already in use" を再現する)。
             let cfgDir = card.claudeProfile?.configDirPath
-            let exists = ClaudeSessionsService.sessionExistsAnywhere(id: sid, configDir: cfgDir)
-            var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
+            let mode = ClaudeSessionsService.resolveLaunchMode(
+                explicitResumeID: explicit,
+                pinnedSessionID: pinned,
+                newSessionID: freshID,
+                sessionExists: { ClaudeSessionsService.sessionExistsAnywhere(id: $0, configDir: cfgDir) }
+            )
+            let sid: String
+            var cmd: String
+            switch mode {
+            case .resume(let id):
+                sid = id; cmd = "claude --resume \(id)"
+            case .createNew(let id):
+                sid = id; cmd = "claude --session-id \(id)"
+            }
+            // 明示指定 or 新規発行のときだけカードへピン留めを更新(既存ピンをそのまま使った
+            // 場合は変更なし)。挙動は元の if/else チェーンと同一。
+            if explicit != nil || pinned == nil {
+                card.claudeSessionID = sid
+                try? context.save()
+            }
             if let cfgDir, !cfgDir.isEmpty {
                 let expandedCfgDir = (cfgDir as NSString).expandingTildeInPath
-                cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(expandedCfgDir)) " + cmd
+                cmd = "CLAUDE_CONFIG_DIR=\(WorktreeService.shellQuote(expandedCfgDir)) " + cmd
             }
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
             if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
-                cmd += " --mcp-config \(shellQuote(cfgPath))"
+                cmd += " --mcp-config \(WorktreeService.shellQuote(cfgPath))"
                 // nudge はファイルに書き出し "$(cat …)" で渡す。巨大な文字列を「キー入力」として
                 // 打ち込むと端末の1行入力上限(MAX_CANON≈1024B)を超えて途中で止まるため。
                 let promptPath = writePromptFile(cardID: cardID)
-                cmd += " --append-system-prompt \"$(cat \(shellQuote(promptPath)))\""
+                cmd += " --append-system-prompt \"$(cat \(WorktreeService.shellQuote(promptPath)))\""
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -365,8 +378,8 @@ final class TerminalSessions {
             var cmd = "codex"
             if let sid = codexEffectiveSession(card) { cmd += " resume \(sid)" }
             if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
-                cmd += " -c " + shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
-                cmd += " -c " + shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
+                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
+                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -440,11 +453,6 @@ final class TerminalSessions {
 
     private static func tomlString(_ s: String) -> String {
         "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
-    }
-
-    /// インタラクティブシェルへ打つ文字列の単一引用符クオート。
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// 設定フォントを開いている全ターミナルへ即時反映する。

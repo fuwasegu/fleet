@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import KanbanKit
 
 /// ターミナルの配色テーマ(背景/文字/カーソル)。ANSI16色一括APIは SwiftTerm に無いため基本3色。
 struct TermTheme: Identifiable, Hashable {
@@ -169,7 +170,7 @@ struct TerminalSettingsPopover: View {
     /// ~/.fleet/FLEET.md を(無ければテンプレ付きで作成して)既定のエディタで開く。
     /// Claude が直接読むのではなく、Fleet が読んで --append-system-prompt で注入する設定ファイル。
     private static func openFleetInstructions() {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".fleet")
+        let dir = ChannelStore.fleetRoot()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("FLEET.md")
         if !FileManager.default.fileExists(atPath: url.path) {

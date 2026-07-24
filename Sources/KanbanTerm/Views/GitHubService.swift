@@ -1,4 +1,5 @@
 import Foundation
+import KanbanKit
 
 /// `gh` CLI を使って、指定ディレクトリの現在ブランチに紐づく PR の URL を取得する。
 /// gh 未導入/未ログイン/PRなし の場合は nil。ブロッキングなので必ず main 以外から呼ぶこと。
@@ -9,7 +10,7 @@ enum GitHubService {
         guard FileManager.default.fileExists(atPath: expanded) else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && git rev-parse --abbrev-ref HEAD 2>/dev/null"]
+        process.arguments = ["-lc", "cd \(WorktreeService.shellQuote(expanded)) && git rev-parse --abbrev-ref HEAD 2>/dev/null"]
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -33,7 +34,7 @@ enum GitHubService {
         let query: String
         if let branch, !branch.isEmpty {
             // open を優先、無ければ最新の PR。head を明示するので worktree でもずれない。
-            query = "gh pr list --head \(shellQuote(branch)) --state all --json url,state "
+            query = "gh pr list --head \(WorktreeService.shellQuote(branch)) --state all --json url,state "
                   + "--jq '([.[] | select(.state==\"OPEN\")] + .)[0].url'"
         } else {
             query = "gh pr view --json url -q .url"
@@ -41,7 +42,7 @@ enum GitHubService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // ログインシェル経由で PATH を通す(homebrew の gh 等)。PR URL を1行出力。
-        process.arguments = ["-lc", "cd \(shellQuote(expanded)) && \(query) 2>/dev/null"]
+        process.arguments = ["-lc", "cd \(WorktreeService.shellQuote(expanded)) && \(query) 2>/dev/null"]
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -53,9 +54,5 @@ enum GitHubService {
         let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let text, text.hasPrefix("http") else { return nil }
         return text
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

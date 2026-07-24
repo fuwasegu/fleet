@@ -99,4 +99,57 @@ import Foundation
             _ = try WorktreeService.create(repoRoot: repo, branch: "dup", baseRef: "main", baseDir: ".fleet-worktrees")
         }
     }
+
+    /// SAFETY: 未 push のコミットがある worktree は "never destroy work" の要石。
+    /// upstream が設定済みでローカルに ahead なコミットがある状態を作り、removalRisk が
+    /// .unpushed を返すこと・removeSafely が撤去せず throw することを確認する。
+    @Test func unpushedBlocksRemoval() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let bareDir = NSTemporaryDirectory() + "wt-test-bare-" + UUID().uuidString + ".git"
+        defer { try? FileManager.default.removeItem(atPath: bareDir) }
+        _ = try WorktreeService.run(["init", "--bare", bareDir], in: repo)
+        _ = try WorktreeService.run(["remote", "add", "origin", bareDir], in: repo)
+        _ = try WorktreeService.run(["push", "origin", "main"], in: repo)
+
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/unpushed", baseRef: "main", baseDir: ".fleet-worktrees")
+        // 新ブランチの upstream を張る(この時点ではまだ ahead=0)。
+        _ = try WorktreeService.run(["push", "-u", "origin", "feat/unpushed"], in: path)
+        // upstream には無いローカルコミットを積む。
+        FileManager.default.createFile(atPath: path + "/new.txt", contents: Data("x".utf8))
+        _ = try WorktreeService.run(["add", "."], in: path)
+        _ = try WorktreeService.run(["commit", "-m", "local only"], in: path)
+
+        #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .unpushed)
+        #expect(throws: WorktreeService.GitError.self) {
+            try WorktreeService.removeSafely(worktreePath: path, repoRoot: repo, inUse: false)
+        }
+        #expect(FileManager.default.fileExists(atPath: path)) // 残っている
+    }
+
+    /// SAFETY: 稼働中のカード(inUse)の worktree は、クリーンであっても撤去してはならない。
+    @Test func inUseBlocksRemoval() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/inuse", baseRef: "main", baseDir: ".fleet-worktrees")
+        #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: true) == .inUse)
+        #expect(throws: WorktreeService.GitError.self) {
+            try WorktreeService.removeSafely(worktreePath: path, repoRoot: repo, inUse: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: path)) // 残っている
+    }
+
+    /// SAFETY: 配置先ディレクトリが既に存在する場合、`WorktreeService.create` は
+    /// (ブランチがまだ存在しなくても)"配置先が既に存在します" 側で拒否しなければならない。
+    /// これまで未テストだった分岐(既存の duplicateBranchRejected はブランチ重複側のみ検証)。
+    @Test func pathCollisionRejected() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let branch = "feat/collide"
+        let path = WorktreeService.worktreePath(repoRoot: repo, branch: branch, baseDir: ".fleet-worktrees")
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        #expect(throws: WorktreeService.GitError.self) {
+            _ = try WorktreeService.create(repoRoot: repo, branch: branch, baseRef: "main", baseDir: ".fleet-worktrees")
+        }
+    }
 }

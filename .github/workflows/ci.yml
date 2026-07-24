@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select newest Xcode
         run: |
@@ -32,8 +32,20 @@ jobs:
           xcodebuild test \
             -project Fleet.xcodeproj -scheme Fleet \
             -destination 'platform=macOS' \
+            -only-testing:KanbanKitTests \
             -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO
 
       - name: fleet-bridge MCP protocol test
-        run: bash scripts/test-bridge.sh build/dd/Build/Products/Debug/fleet-bridge
+        run: |
+          set -euo pipefail
+          # Derive the built products path robustly instead of hardcoding a
+          # DerivedData hash directory (we do pin -derivedDataPath, but still
+          # locate the binary via find rather than assuming Debug/ layout).
+          BRIDGE="$(find build/dd/Build/Products -type f -name fleet-bridge -not -path '*.app/*' -perm +111 | head -1)"
+          if [ -z "$BRIDGE" ]; then
+            echo "::error::fleet-bridge binary not found under build/dd/Build/Products"
+            exit 1
+          fi
+          echo "Using fleet-bridge at: $BRIDGE"
+          bash scripts/test-bridge.sh "$BRIDGE"

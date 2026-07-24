@@ -3,6 +3,9 @@ import Foundation
 public enum WorktreeBase: Hashable, Sendable { case current, defaultBranch }
 
 public struct WorktreeService {
+    /// Fleet 管理 worktree の既定の格納先(リポジトリルート相対)。
+    public static let defaultWorktreeBaseDir = "../.fleet-worktrees"
+
     public static func sanitizeBranch(_ raw: String) -> String {
         var s = raw.map { c -> Character in
             c.isLetter || c.isNumber || "._/-".contains(c) ? c : "-"
@@ -40,7 +43,8 @@ extension WorktreeService {
         }
     }
 
-    private static func shellQuote(_ s: String) -> String {
+    /// シェルコマンド文字列へ安全に埋め込むための単一引用符クオート。
+    public static func shellQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
