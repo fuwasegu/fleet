@@ -84,6 +84,32 @@ struct AgentDetectionTests {
         #expect(c("", ["❯ git status"]) != .idle)
     }
 
+    @Test func powerlevel10kPromptIsNotIdle() {
+        // p10k のデフォルト2行プロンプトは Claude の入力欄と同じ box-drawing 文字
+        // (╭ ╰ ─ ❯)を使うが、Claude 専用の証拠(長い横罫線や "│ > " マーカー、
+        // ヒントフッタ)が無いので Idle と誤判定してはならない(実バグの再発防止)。
+        let lines = [
+            "╭─ ~/Projects/foo  main",
+            "╰─❯ ",
+        ]
+        #expect(c("", lines) != .idle)
+    }
+
+    @Test func starshipTwoLinePromptIsNotIdle() {
+        // starship のデフォルト2行プロンプトも同様(┌─/└─❯ 変種と ╭─/╰─❯ 変種の両方)。
+        let square = [
+            "┌─ ~/Projects/foo on  main",
+            "└─❯ ",
+        ]
+        #expect(c("", square) != .idle)
+
+        let rounded = [
+            "╭─ ~/Projects/foo on  main",
+            "╰─❯ ",
+        ]
+        #expect(c("", rounded) != .idle)
+    }
+
     @Test func claudeWorkingFromFooter() {
         #expect(c("", ["… (esc to interrupt)"]) == .working)
     }

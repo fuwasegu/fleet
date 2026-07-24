@@ -134,16 +134,31 @@ public enum AgentDetection {
         //
         // FIX I2: 上記のフッタヒントだけを証拠とすると、フッタが画面外に流れた/表示され
         // なかった場合に Idle へ絶対に戻れず、A2A の outbox が(idle 待ちで)無期限に
-        // 溜まり続けてしまう(偽陰性)。証拠集合に Claude の入力欄の枠線(box-drawing。
-        // ╭╮╰╯─│)と working_footer が使う "esc to interrupt" を加えて偽陰性を減らし、
-        // 証拠を見る窓も下部6行→12行に広げる(フッタや枠線が少し上にあっても拾える)。
+        // 溜まり続けてしまう(偽陰性)。証拠を見る窓は下部6行→12行に広げる
+        // (フッタや枠線が少し上にあっても拾える)。
+        //
+        // FIX I3 (回帰の再修正): I2 で証拠集合にベア単体の box-drawing 文字(╭╮╰╯─│)を
+        // 加えたが、これらは Claude 専用ではない。powerlevel10k / starship のデフォルト
+        // 2行プロンプトは全く同じ文字で罫線を描く(例: "╭─ ~/proj  main" / "╰─❯ ")ため、
+        // 素の p10k/starship シェルが再び Idle と誤判定されてしまう(実バグの再発)。
+        // ベア単体の box 文字は証拠から除外し、代わりに Claude の入力欄に特有の形を見る:
+        //   - Claude のヒントフッタ文字列(既存。transcript ルール等と共通)
+        //   - 横方向に長く連続する "─" の連なり(Claude の入力欄は端末幅いっぱいの箱を
+        //     描くため十数〜数十文字連続するが、p10k/starship のセグメント区切りは
+        //     普通 1〜2 文字しか連続しない)
+        //   - 入力欄内部の目印: "│" の直後(空白を挟んで)に "> " が続く行
+        //     (Claude の "│ > " プロンプト行そのもの)
+        // "esc to interrupt" は working_footer(優先度700・region .whole)が同じ文字列で
+        // 先に .working を返すため、この idle 証拠内に残っていても無害(bottom(12) の窓は
+        // 常に .whole の部分集合なので、working_footer が先に確定する)。よって残す。
         // それでも素のシェル単体(❯ だけ、枠線もヒントも無い)は依然 Idle にならない
         // (bareShellPromptIsNotIdle で回帰確認)。
         .init("idle_caret", .idle, 250, .bottom(12),
               .all([.lineRegex("^\\s*❯"),
                     .not(.containsAny(["enter to select", "esc to cancel", "arrow keys", "to navigate"])),
-                    .containsAny(["? for shortcuts", "ctrl+o", "ctrl+e", "↑↓ scroll", "esc to interrupt",
-                                   "╭", "╮", "╰", "╯", "│", "─"])])),
+                    .any([.containsAny(["? for shortcuts", "ctrl+o", "ctrl+e", "↑↓ scroll", "esc to interrupt"]),
+                          .contains([String(repeating: "─", count: 10)]),
+                          .lineRegex("^\\s*│\\s*>")])])),
     ]
 
     // MARK: - Codex ルール(挙動という事実に基づく自作)
