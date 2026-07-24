@@ -196,11 +196,11 @@ struct BoardView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "terminal")
                         Text(card.title).font(.headline).lineLimit(1)
-                        Text(card.workingDirPath ?? "~")
+                        Text(card.effectiveCwd ?? "~")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                         Spacer()
                         Button {
-                            openMarkdownPicker(cwd: card.workingDirPath)
+                            openMarkdownPicker(cwd: card.effectiveCwd)
                         } label: {
                             Label("Markdown", systemImage: "doc.richtext")
                         }
@@ -218,7 +218,7 @@ struct BoardView: View {
                     Divider()
                     TerminalView(
                         cardID: id,
-                        directory: card.workingDirPath,
+                        directory: card.effectiveCwd,
                         // どのカードも開いた時点で Agent を起動/自動復帰する(初回のみ。以降は
                         // 生きているセッションをそのまま表示)。Fleet はエージェント盤面なので既定で起動。
                         startAgent: true,
@@ -304,7 +304,7 @@ struct BoardView: View {
 
     /// 現在ブランチと PR URL を git/gh で取得してカードに反映する(取得はバックグラウンド)。
     private func fetchGitInfo(for cardID: UUID) {
-        guard let cwd = BoardStore(context: context).card(withID: cardID)?.workingDirPath else { return }
+        guard let cwd = BoardStore(context: context).card(withID: cardID)?.effectiveCwd else { return }
         Task {
             let info = await Task.detached { () -> (String?, String?) in
                 let branch = GitHubService.branch(cwd: cwd)

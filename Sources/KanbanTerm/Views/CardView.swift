@@ -209,7 +209,7 @@ struct CardFace: View {
 
     /// cwd の末尾ディレクトリ名(プロンプトのカレント表示)。
     private var dirName: String {
-        guard let p = card.workingDirPath, !p.isEmpty else { return "~" }
+        guard let p = card.effectiveCwd, !p.isEmpty else { return "~" }
         let last = (p as NSString).lastPathComponent
         return last.isEmpty ? "~" : last
     }
@@ -272,7 +272,7 @@ extension Card {
     /// プロンプト行ホバー時の tooltip 本文: cwd フルパス + ブランチ全文 + PR URL(各1行)。
     var promptTooltipText: String {
         var lines: [String] = []
-        if let p = workingDirPath, !p.isEmpty { lines.append(p) }
+        if let p = effectiveCwd, !p.isEmpty { lines.append(p) }
         if let b = branch { lines.append("⎇ \(b)") }
         if let pr = prURL, !pr.isEmpty { lines.append(pr) }
         return lines.joined(separator: "\n")
@@ -334,7 +334,7 @@ struct PromptTooltip: View {
 
     /// cwd: 親パスを muted、末尾ディレクトリを強調。
     @ViewBuilder private var cwdText: some View {
-        let full = card.workingDirPath ?? ""
+        let full = card.effectiveCwd ?? ""
         let base = (full as NSString).lastPathComponent
         let parent = (full as NSString).deletingLastPathComponent
         (
@@ -409,13 +409,18 @@ struct CardView: View {
     @State private var showingMemory = false
     @State private var hovering = false
 
+    // Fleet 所有 worktree カードの削除フロー用状態。
+    @State private var confirmingCleanWorktreeDelete = false        // risk == .clean
+    @State private var warningWorktreeRisk: WorktreeService.RemovalRisk?  // risk == .dirty/.unpushed/.inUse
+    @State private var worktreeDeleteError: String?                 // removeSafely が throw した場合
+
     var body: some View {
         CardFace(
             card: card,
             showActions: true,
             hasPendingMessage: uiState.pendingMessageCardIDs.contains(card.id),
             onEdit: beginRename,
-            onDelete: { confirmingDelete = true },
+            onDelete: beginDelete,
             onOpenTerminal: { uiState.terminalCardID = card.id },
             onChannelTap: { showingMemory = true },
             onPromptHover: { location in
@@ -460,10 +465,10 @@ struct CardView: View {
                     Button { pickingSession = true } label: {
                         Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
                     }
-                    .disabled(card.workingDirPath == nil)
+                    .disabled(card.effectiveCwd == nil)
                 }
                 Divider()
-                Button(role: .destructive) { confirmingDelete = true } label: {
+                Button(role: .destructive, action: beginDelete) {
                     Label("カードを削除", systemImage: "trash")
                 }
             }
@@ -473,7 +478,7 @@ struct CardView: View {
                 }
             }
             .sheet(isPresented: $pickingSession) {
-                SessionPickerSheet(cwd: card.workingDirPath) { sessionID in
+                SessionPickerSheet(cwd: card.effectiveCwd) { sessionID in
                     resumeSession(sessionID)
                 }
             }
@@ -485,6 +490,45 @@ struct CardView: View {
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("「\(card.title)」を削除します。起動中のターミナル/Agent も終了します。")
+            }
+            .confirmationDialog(
+                "この worktree も削除しますか?",
+                isPresented: $confirmingCleanWorktreeDelete,
+                titleVisibility: .visible
+            ) {
+                Button("worktree も削除", role: .destructive, action: removeWorktreeThenDeleteCard)
+                Button("カードだけ削除(worktree は残す)", action: clearWorktreeThenDeleteCard)
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("「\(card.title)」のカードと、紐づく worktree(\(card.worktreePath ?? ""))を削除します。worktree はクリーンな状態です。")
+            }
+            .confirmationDialog(
+                worktreeWarningTitle,
+                isPresented: Binding(
+                    get: { warningWorktreeRisk != nil },
+                    set: { if !$0 { warningWorktreeRisk = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("カードだけ削除(worktree はディスクに残す)", role: .destructive, action: clearWorktreeThenDeleteCard)
+                Button("ターミナルを開いて手動で処理") {
+                    warningWorktreeRisk = nil
+                    uiState.terminalCardID = card.id
+                }
+                Button("キャンセル", role: .cancel) { warningWorktreeRisk = nil }
+            } message: {
+                Text(worktreeWarningMessage)
+            }
+            .alert(
+                "削除できませんでした",
+                isPresented: Binding(
+                    get: { worktreeDeleteError != nil },
+                    set: { if !$0 { worktreeDeleteError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { worktreeDeleteError = nil }
+            } message: {
+                Text(worktreeDeleteError ?? "")
             }
             .fileImporter(isPresented: $changingDir, allowedContentTypes: [.folder]) { result in
                 if case .success(let url) = result {
@@ -573,6 +617,72 @@ struct CardView: View {
     private func beginRename() {
         draft = card.title
         renaming = true
+    }
+
+    /// カード削除の入口。Fleet 所有 worktree が紐づく場合のみ安全確認フローに分岐し、
+    /// それ以外(フォルダカード/非所有 worktree)は従来どおり即確認ダイアログ。
+    private func beginDelete() {
+        guard card.isFleetOwnedWorktree,
+              let worktreePath = card.worktreePath,
+              let repoRoot = card.repoRoot else {
+            confirmingDelete = true
+            return
+        }
+        let inUse = sessions.hasSession(card.id)
+        let risk = WorktreeService.removalRisk(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+        switch risk {
+        case .clean:
+            confirmingCleanWorktreeDelete = true
+        case .dirty, .unpushed, .inUse:
+            warningWorktreeRisk = risk
+        }
+    }
+
+    private var worktreeWarningTitle: String {
+        switch warningWorktreeRisk {
+        case .dirty: return "未コミットの変更があります"
+        case .unpushed: return "未プッシュのコミットがあります"
+        case .inUse: return "セッションが使用中です"
+        case .clean, nil: return ""
+        }
+    }
+
+    private var worktreeWarningMessage: String {
+        switch warningWorktreeRisk {
+        case .dirty:
+            return "この worktree には未コミットの変更が残っています。データを失わないよう、Fleet はこの worktree を削除しません。"
+        case .unpushed:
+            return "この worktree には未プッシュ/未マージのコミットがあります。履歴を失わないよう、Fleet はこの worktree を削除しません。"
+        case .inUse:
+            return "この worktree は現在ターミナル/Agent セッションで使用中です。使用中の worktree は削除しません。"
+        case .clean, nil:
+            return ""
+        }
+    }
+
+    /// worktree をディスクから安全に撤去してからカードを削除する(risk == .clean のときのみ到達)。
+    /// `removeSafely` は clean 以外なら throw し、`--force` は一切使わない。
+    private func removeWorktreeThenDeleteCard() {
+        guard let worktreePath = card.worktreePath, let repoRoot = card.repoRoot else {
+            deleteCard()
+            return
+        }
+        let inUse = sessions.hasSession(card.id)
+        do {
+            try WorktreeService.removeSafely(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+            try BoardStore(context: context).clearWorktree(card)
+            deleteCard()
+        } catch let e as WorktreeService.GitError {
+            worktreeDeleteError = e.message
+        } catch {
+            worktreeDeleteError = "\(error)"
+        }
+    }
+
+    /// worktree バインディングだけ解除してカードを削除する。ディスク上の worktree は残す。
+    private func clearWorktreeThenDeleteCard() {
+        do { try BoardStore(context: context).clearWorktree(card) } catch {}
+        deleteCard()
     }
 
     private func deleteCard() {

@@ -84,6 +84,36 @@ public struct BoardIntent: Codable, Identifiable, Sendable {
     }
 }
 
+/// Agent が自分のカードに worktree 作成を依頼する意図(worktree-intents.jsonl)。
+/// board-intents と同じファイル IPC パターン(bridge は SwiftData に触れないため)。
+/// base は "current"(今のブランチから分岐)| "default"(既定ブランチから分岐)。
+public struct WorktreeIntent: Codable, Identifiable, Sendable {
+    public let id: String
+    public let fromCardID: String
+    public let branch: String
+    public let base: String        // "current" | "default"
+    public let createdAt: Date
+
+    public init(id: String = UUID().uuidString, fromCardID: String, branch: String,
+                base: String = "current", createdAt: Date = Date()) {
+        self.id = id; self.fromCardID = fromCardID; self.branch = branch
+        self.base = base; self.createdAt = createdAt
+    }
+}
+
+/// worktree 作成 intent の結果(worktree-results/<intentID>.json)。Fleet 本体が書き、
+/// fleet-bridge がポーリングして Agent へ返す。
+public struct WorktreeResult: Codable, Identifiable, Sendable {
+    public let id: String
+    public let ok: Bool
+    public let path: String?
+    public let error: String?
+
+    public init(id: String, ok: Bool, path: String? = nil, error: String? = nil) {
+        self.id = id; self.ok = ok; self.path = path; self.error = error
+    }
+}
+
 /// 盤面スナップショット(board.json)。fleet_board が読む。Agent が盤面を観測できるように。
 public struct BoardSnapshot: Codable, Sendable, Equatable {
     public struct Col: Codable, Sendable, Equatable {
@@ -92,8 +122,37 @@ public struct BoardSnapshot: Codable, Sendable, Equatable {
     }
     public struct CardRef: Codable, Sendable, Equatable {
         public var id: String; public var title: String; public var column: String; public var status: String
-        public init(id: String, title: String, column: String, status: String) {
+        // Fleet 管理 worktree バインディング(旧 board.json には無いフィールド。decode 時は欠落を許容)。
+        public var repoRoot: String?
+        public var worktreePath: String?
+        public var branch: String?
+        public var isFleetOwnedWorktree: Bool
+
+        public init(id: String, title: String, column: String, status: String,
+                    repoRoot: String? = nil, worktreePath: String? = nil, branch: String? = nil,
+                    isFleetOwnedWorktree: Bool = false) {
             self.id = id; self.title = title; self.column = column; self.status = status
+            self.repoRoot = repoRoot; self.worktreePath = worktreePath; self.branch = branch
+            self.isFleetOwnedWorktree = isFleetOwnedWorktree
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, title, column, status, repoRoot, worktreePath, branch, isFleetOwnedWorktree
+        }
+
+        // 手書き init(from:): isFleetOwnedWorktree のような非 Optional 追加フィールドは
+        // 合成 Decodable だとキー欠落で全体デコード失敗になるため、旧 board.json との
+        // 後方互換のため decodeIfPresent + デフォルト値で吸収する。
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            title = try c.decode(String.self, forKey: .title)
+            column = try c.decode(String.self, forKey: .column)
+            status = try c.decode(String.self, forKey: .status)
+            repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
+            worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+            branch = try c.decodeIfPresent(String.self, forKey: .branch)
+            isFleetOwnedWorktree = try c.decodeIfPresent(Bool.self, forKey: .isFleetOwnedWorktree) ?? false
         }
     }
     public var columns: [Col]
@@ -339,6 +398,64 @@ public enum ChannelStore {
            old == snapshot { return false }
         try? d.write(to: url, options: .atomic)
         return true
+    }
+
+    // MARK: - worktree 作成 intent(Agent → Fleet)
+
+    public static func worktreeIntentsFile(for id: UUID) -> URL {
+        dir(for: id).appending(path: "worktree-intents.jsonl")
+    }
+
+    public static func worktreeIntents(for id: UUID) -> [WorktreeIntent] {
+        guard let text = try? String(contentsOf: worktreeIntentsFile(for: id), encoding: .utf8) else { return [] }
+        let dec = decoder()
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let d = line.data(using: .utf8) else { return nil }
+            return try? dec.decode(WorktreeIntent.self, from: d)
+        }
+    }
+
+    /// 主に KanbanKit 側テスト/内部呼び出し用。bridge 自体は KanbanKit にリンクできないため、
+    /// 実運用での追記は fleet-bridge/main.swift が同じ形式・同じロックで直接行う。
+    public static func appendWorktreeIntent(_ intent: WorktreeIntent, to id: UUID) {
+        ensureDir(id)
+        guard let data = try? encoder().encode(intent),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line += "\n"
+        withChannelLock(dir(for: id)) {
+            appendLineAtomically(Data(line.utf8), to: worktreeIntentsFile(for: id))
+        }
+    }
+
+    public static func appliedWorktreeIntentIDs(for id: UUID) -> Set<String> {
+        let url = dir(for: id).appending(path: "worktree-applied.json")
+        guard let d = try? Data(contentsOf: url),
+              let arr = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+        return Set(arr)
+    }
+    public static func writeAppliedWorktreeIntentIDs(_ ids: Set<String>, for id: UUID) {
+        ensureDir(id)
+        if let d = try? JSONEncoder().encode(Array(ids)) {
+            try? d.write(to: dir(for: id).appending(path: "worktree-applied.json"), options: .atomic)
+        }
+    }
+
+    // MARK: - worktree 作成結果(Fleet → Agent)
+
+    public static func worktreeResultsDir(for id: UUID) -> URL {
+        dir(for: id).appending(path: "worktree-results", directoryHint: .isDirectory)
+    }
+    public static func writeWorktreeResult(_ result: WorktreeResult, for id: UUID) {
+        let resultsDir = worktreeResultsDir(for: id)
+        try? FileManager.default.createDirectory(at: resultsDir, withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(result) {
+            try? d.write(to: resultsDir.appending(path: "\(result.id).json"), options: .atomic)
+        }
+    }
+    public static func worktreeResult(id: String, for channelID: UUID) -> WorktreeResult? {
+        let url = worktreeResultsDir(for: channelID).appending(path: "\(id).json")
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(WorktreeResult.self, from: d)
     }
 
     // MARK: - Agent 自己申告ステータス(fleet_status)

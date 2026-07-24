@@ -485,10 +485,14 @@ final class TerminalSessions {
 
     /// ターミナルを閉じる時に呼ぶ。カードの表示パスを現在のシェル cwd に更新する。
     func refreshCwd(for cardID: UUID, context: ModelContext) {
-        guard let term = views[cardID] else { return }
+        guard let card = BoardStore(context: context).card(withID: cardID) else { return }
+        // worktree 所有カードは cwd が確定しているので pid 追従で上書きしない
+        if card.worktreePath != nil { return }
+        let term = views[cardID]
+        guard let term else { return }
         let pid = term.process.shellPid
         guard pid > 0, let cwd = Self.cwd(ofPID: pid) else { return }
-        if let card = BoardStore(context: context).card(withID: cardID), card.workingDirPath != cwd {
+        if card.workingDirPath != cwd {
             card.workingDirPath = cwd
             try? context.save()
         }

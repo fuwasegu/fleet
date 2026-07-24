@@ -85,6 +85,9 @@ public final class Card {
     public var agentKindRaw: String = AgentKind.claude.rawValue   // 起動する Agent 種別
     public var claudeSessionID: String? = nil   // このカードに固定した Claude セッション id(自動復帰用)
     public var codexSessionID: String? = nil    // このカードに紐づく Codex セッション id(初回起動後に捕捉)
+    public var repoRoot: String? = nil          // Fleet 管理 worktree の元リポジトリ root
+    public var worktreePath: String? = nil      // このカードに紐づく worktree の絶対パス
+    public var isFleetOwnedWorktree: Bool = false  // worktree の作成/撤去を Fleet が管理してよいか
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -122,4 +125,7 @@ public final class Card {
 
     /// "Done" 表示 = 完了(idle) かつ 未閲覧
     public var isDone: Bool { agentState == .idle && !seen }
+
+    /// cwd 解決: worktree バインディングがあれば優先し、無ければ従来の作業ディレクトリ
+    public var effectiveCwd: String? { worktreePath ?? workingDirPath }
 }

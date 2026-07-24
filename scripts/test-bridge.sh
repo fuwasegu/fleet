@@ -54,6 +54,7 @@ grep -q '"protocolVersion":"2025-06-18"' "$OUT" || fail "initialize did not nego
 grep -q 'fleet_recall'            "$OUT" || fail "tools/list missing fleet_recall"
 grep -q 'fleet_remember'          "$OUT" || fail "tools/list missing fleet_remember"
 grep -q 'fleet_peers'             "$OUT" || fail "tools/list missing fleet_peers"
+grep -q 'fleet_worktree_create'   "$OUT" || fail "tools/list missing fleet_worktree_create"
 grep -q 'Saved to shared memory'  "$OUT" || fail "remember not saved"
 grep -q 'hello-ci'                "$OUT" || fail "recall did not return remembered text"
 # fleet_peers の結果行(id:5)だけを取り出して検証する(他ツールの出力と混ざらないよう)。

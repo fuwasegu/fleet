@@ -457,6 +457,28 @@ struct BoardStoreTests {
         #expect(Set(snap.cards.map(\.title)) == Set(["a", "b"]))
     }
 
+    /// worktree バインディング(setWorktree)が board.json スナップショットへ反映されることを確認する。
+    @Test func boardSnapshotReflectsWorktreeBinding() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+        try store.setWorktree(a, repoRoot: "/repo", worktreePath: "/repo/.worktrees/a", branch: "feat/a", fleetOwned: true)
+        store.writeBoardSnapshot(for: ch.id)
+        let url = ChannelStore.dir(for: ch.id).appending(path: "board.json")
+        let snap = try JSONDecoder().decode(BoardSnapshot.self, from: Data(contentsOf: url))
+        let cardA = try #require(snap.cards.first { $0.title == "a" })
+        #expect(cardA.repoRoot == "/repo")
+        #expect(cardA.worktreePath == "/repo/.worktrees/a")
+        #expect(cardA.branch == "feat/a")
+        #expect(cardA.isFleetOwnedWorktree == true)
+        let cardB = try #require(snap.cards.first { $0.title == "b" })
+        #expect(cardB.worktreePath == nil)
+        #expect(cardB.isFleetOwnedWorktree == false)
+    }
+
     // MARK: helpers
 
     private func writeIntent(_ intent: BoardIntent, to channelID: UUID) {
