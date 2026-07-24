@@ -231,7 +231,17 @@ public enum ChannelStore {
     // MARK: - 読み取り
 
     /// memory.jsonl の生の行(空行を除く)。デコード可否に関わらず全行を返す。
+    /// deleteEntry が同ファイルを全書き換えするため(SECURITY item 4)、チャンネルロック下で
+    /// 読む — O_APPEND の追記中に読んでも壊れるのは末尾1行だけで自己修復するが、全書き換えの
+    /// 最中に読むと(rename の間隙で)行を大量に失いかねず、自己修復では済まないため。
     static func rawLines(for id: UUID) -> [String] {
+        withChannelLock(dir(for: id)) { rawLinesUnlocked(for: id) }
+    }
+
+    /// rawLines のロック無し版。すでに withChannelLock 下にある呼び出し元専用
+    /// (deleteEntry / mergeMemory)。ここから rawLines(ロック版)を呼ぶと同一チャンネルの
+    /// .lock を二重に取ろうとして自己デッドロックするため、内部読み取りは必ずこちらを使う。
+    private static func rawLinesUnlocked(for id: UUID) -> [String] {
         guard let text = try? String(contentsOf: memoryFile(for: id), encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     }
@@ -275,7 +285,8 @@ public enum ChannelStore {
         withChannelLock(dir(for: id)) {
             // 生の行を保持したまま、対象エントリの行だけ除去する。
             // デコード不能な行は「消したい対象ではない」ので温存する(MEDIUM-3)。
-            let kept = rawLines(for: id).filter { line in
+            // 既に withChannelLock 下にいるため rawLinesUnlocked を使う(二重ロック回避)。
+            let kept = rawLinesUnlocked(for: id).filter { line in
                 guard let d = line.data(using: .utf8),
                       let e = try? dec.decode(ChannelEntry.self, from: d) else { return true }
                 return e.id != entryID
@@ -287,7 +298,9 @@ public enum ChannelStore {
     /// src の全行を dst 末尾へ移す(チャンネル合流時)。ロック下で追記するので
     /// デコード不能行も含めて温存され、dst への並行追記とも競合しない。
     public static func mergeMemory(from src: UUID, into dst: UUID) {
-        let srcLines = rawLines(for: src)
+        // relocateAndRemove から呼ばれるときは既に src の withChannelLock 下にあるため、
+        // rawLinesUnlocked を使う(二重ロック回避)。src ロックの保持は呼び出し側の責務。
+        let srcLines = rawLinesUnlocked(for: src)
         guard !srcLines.isEmpty else { return }
         ensureDir(dst)
         let body = srcLines.joined(separator: "\n") + "\n"
@@ -518,5 +531,46 @@ public enum ChannelStore {
     public static func removeMCPConfig(cardID: UUID, channelID: UUID) {
         let url = dir(for: channelID).appendingPathComponent("mcp-\(cardID.uuidString).json")
         try? FileManager.default.removeItem(at: url)
+    }
+
+    // MARK: - ターミナル注入サニタイズ
+
+    /// A2A outbox のメッセージ本文/送信者名など「Agent が書いたテキスト」を、
+    /// 受信側カードの live ターミナルへ `term.send` で注入する前に必ず通す。
+    /// C0/C1 制御文字(ESC 含む)を除去して ANSI/OSC エスケープの注入を防ぎ、
+    /// 空白を畳んでから maxLength で切り詰める(1件で大量出力を流し込ませない)。
+    public static func sanitizeForTerminal(_ s: String, maxLength: Int = 2000) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x1F, 0x7F, 0x80...0x9F:
+                scalars.append(" ")
+            default:
+                scalars.append(scalar)
+            }
+        }
+        let replaced = String(scalars)
+        let collapsed = replaced
+            .split(whereSeparator: { $0 == " " || $0.isWhitespace })
+            .joined(separator: " ")
+
+        // maxLength を書記素クラスタ(Character)単位でだけ切り詰めると、基底文字1つに
+        // 結合文字(combining mark)を何万個も連結した入力が「1文字」としてカウントされて
+        // 上限を素通りしてしまう(FIX I1)。書記素の上限に加えて Unicode スカラ単位の上限
+        // (maxLength * 4)でも切り詰め、どちらかが発火したら "…" を付ける。スカラ列から
+        // String を再構築するので、結果は常に妥当な UTF-8 になる。
+        var result = collapsed
+        var truncated = false
+        if result.count > maxLength {
+            result = String(result.prefix(maxLength))
+            truncated = true
+        }
+        let scalarCeiling = maxLength * 4
+        if result.unicodeScalars.count > scalarCeiling {
+            let limited = String.UnicodeScalarView(result.unicodeScalars.prefix(scalarCeiling))
+            result = String(limited)
+            truncated = true
+        }
+        return truncated ? result + "…" : result
     }
 }

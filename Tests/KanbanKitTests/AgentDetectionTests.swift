@@ -36,7 +36,78 @@ struct AgentDetectionTests {
     @Test func claudeIdleFromStarTitle() { #expect(c("\u{2733} ready", []) == .idle) }
 
     @Test func claudeIdleFromPromptCaret() {
-        #expect(c("", ["assistant output", "❯ "]) == .idle)
+        // 単なる ❯ ではなく、Claude TUI のヒントフッタ(証拠)が同じ下部ウィンドウにある場合のみ Idle。
+        #expect(c("", ["assistant output", "❯ ", "? for shortcuts"]) == .idle)
+    }
+
+    @Test func claudeIdleWithTUIEvidenceIsIdle() {
+        // idleFromPromptCaret と同型の、より実際の Claude 画面に近いフィクスチャ。
+        let lines = [
+            "assistant output",
+            "❯ ",
+            "? for shortcuts · shift+tab to cycle",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func claudeIdleWithInputBoxFrameEvidenceIsIdle() {
+        // FIX I2: "? for shortcuts" 等のフッタヒントが画面外に流れて見えなくても、
+        // Claude の入力欄の枠線(╭─...│...╰─)があれば TUI 証拠として Idle と判定できる
+        // (偽陰性の低減)。キャレット行(❯)自体は既存テストと同じく素の行として置く。
+        let lines = [
+            "assistant output",
+            "╭─────────────────────────────╮",
+            "│ >                           │",
+            "╰─────────────────────────────╯",
+            "❯ ",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func claudeIdleWithFooterHintBeyondOldWindowIsIdle() {
+        // 従来の下部6行の窓では ❯ とフッタヒントが同時に入らない配置(キャレットが
+        // 7行以上前)でも、証拠ウィンドウを12行に広げたことで拾える(偽陰性の低減)。
+        let lines = [
+            "❯ ",
+            "line a", "line b", "line c", "line d", "line e",
+            "line f", "line g", "line h",
+            "? for shortcuts",
+        ]
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func bareShellPromptIsNotIdle() {
+        // ❯ は pure/starship/oh-my-zsh 等の素のシェルプロンプトでも極めて一般的な記号。
+        // Claude TUI の証拠(ヒントフッタ等)が無ければ、素のシェルを Idle(=A2A hub がメッセージを
+        // 投げ込んで良い状態)と誤判定してはならない(実バグの回帰)。
+        #expect(c("", ["❯ "]) != .idle)
+        #expect(c("", ["❯ git status"]) != .idle)
+    }
+
+    @Test func powerlevel10kPromptIsNotIdle() {
+        // p10k のデフォルト2行プロンプトは Claude の入力欄と同じ box-drawing 文字
+        // (╭ ╰ ─ ❯)を使うが、Claude 専用の証拠(長い横罫線や "│ > " マーカー、
+        // ヒントフッタ)が無いので Idle と誤判定してはならない(実バグの再発防止)。
+        let lines = [
+            "╭─ ~/Projects/foo  main",
+            "╰─❯ ",
+        ]
+        #expect(c("", lines) != .idle)
+    }
+
+    @Test func starshipTwoLinePromptIsNotIdle() {
+        // starship のデフォルト2行プロンプトも同様(┌─/└─❯ 変種と ╭─/╰─❯ 変種の両方)。
+        let square = [
+            "┌─ ~/Projects/foo on  main",
+            "└─❯ ",
+        ]
+        #expect(c("", square) != .idle)
+
+        let rounded = [
+            "╭─ ~/Projects/foo on  main",
+            "╰─❯ ",
+        ]
+        #expect(c("", rounded) != .idle)
     }
 
     @Test func claudeWorkingFromFooter() {

@@ -122,4 +122,43 @@ struct WorktreeIntentApplyTests {
         let result = try #require(ChannelStore.worktreeResult(id: intent.id, for: ch.id))
         #expect(result.ok == false)
     }
+
+    /// SECURITY: `fromCardID` はチャンネルの実メンバーでなければならない。チャンネル外の
+    /// カード(B)を指す intent をチャンネル(A のみ所属)に書き込んでも、B に worktree が
+    /// バインドされてはならない(cross-channel targeting と同種の bypass)。
+    @Test func applyWorktreeIntentFailsWhenCardNotMemberOfChannel() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let repo = try tmpRepo()
+        let a = try store.addCard(title: "a", to: todo, workingDirPath: repo)
+        let b = try store.addCard(title: "b", to: todo, workingDirPath: repo)  // channel に所属させない
+        let other = try store.addCard(title: "other", to: todo)
+        let ch = try #require(try store.connectCards(a, other))
+        defer {
+            ChannelStore.removeBinding(cardID: a.id)
+            ChannelStore.removeBinding(cardID: b.id)
+            ChannelStore.removeBinding(cardID: other.id)
+            ChannelStore.removeDir(for: ch.id)
+            removeTestRoot(forRepo: repo)
+        }
+
+        // b はチャンネルに参加していない(a と other のみが所属)
+        #expect(ch.cards.contains { $0.id == b.id } == false)
+
+        let intent = WorktreeIntent(fromCardID: b.id.uuidString, branch: "feat/should-not-bind", base: "current")
+        ChannelStore.appendWorktreeIntent(intent, to: ch.id)
+        store.applyWorktreeIntents(for: ch.id)
+
+        // b には worktree がバインドされていない
+        #expect(b.isFleetOwnedWorktree == false)
+        #expect(b.worktreePath == nil)
+
+        // 失敗結果が書かれている
+        let result = try #require(ChannelStore.worktreeResult(id: intent.id, for: ch.id))
+        #expect(result.ok == false)
+
+        // intent は適用済みとして記録され、再試行され続けない
+        let applied = ChannelStore.appliedWorktreeIntentIDs(for: ch.id)
+        #expect(applied.contains(intent.id))
+    }
 }

@@ -12,9 +12,23 @@ func argValue(_ name: String) -> String {
     if let i = a.firstIndex(of: name), i + 1 < a.count { return a[i + 1] }
     return ""
 }
-let cardID = argValue("--card")
+/// パス構築に使う id が正しい UUID 形式かを検証する(パス脱出防止)。
+/// binding.json の channel も --card 引数も、改ざん/誤入力され得る文字列であり、
+/// そのままパスへ埋め込むと "../../etc/passwd" のような値で ~/.fleet の外へ
+/// エスケープできてしまう(SECURITY item 1)。不正なら nil を返し、呼び出し側は
+/// クラッシュではなく「未指定/無所属」として扱う。
+func validUUID(_ s: String) -> String? {
+    guard UUID(uuidString: s) != nil else { return nil }
+    return s
+}
+
+// --card はカードディレクトリ(cards/<id>/)のパスに直接使われるため、起動直後に検証する。
+// 不正なら「カード未指定」と同じ扱いにする(readBinding が空文字を弾いて nil を返す)。
+let cardID = validUUID(argValue("--card")) ?? ""
 let rootOverride = argValue("--root")
-// 後方互換: 旧 --channel <dir> 指定も一応受ける(その場合は固定チャンネルとして扱う)
+// 後方互換: 旧 --channel <dir> 指定も一応受ける(その場合は固定チャンネルとして扱う)。
+// これは Fleet 本体(信頼できる起動元)が渡す明示的なディレクトリであり、
+// binding.json 由来の channel id とは信頼レベルが異なるため検証対象外。
 let fixedChannelDir = argValue("--channel")
 
 let fleetRoot: URL = rootOverride.isEmpty
@@ -35,7 +49,9 @@ func readBinding() -> Binding? {
 /// 現在の所属チャンネルのディレクトリ。所属なしなら nil。
 func currentChannelDir() -> URL? {
     if !fixedChannelDir.isEmpty { return URL(fileURLWithPath: fixedChannelDir) }
-    guard let ch = readBinding()?.channel, !ch.isEmpty else { return nil }
+    // channel は binding.json (app が書くが改ざん可能) 由来の untrusted な文字列なので、
+    // パスに埋め込む前に UUID として検証する(SECURITY item 1)。不正なら「無所属」と同義に扱う。
+    guard let chRaw = readBinding()?.channel, !chRaw.isEmpty, let ch = validUUID(chRaw) else { return nil }
     return fleetRoot.appendingPathComponent("channels/\(ch)", isDirectory: true)
 }
 
@@ -45,6 +61,11 @@ func authorName() -> String {
 }
 
 let maxRememberBytes = 16 * 1024   // fleet_remember の上限(交錯・肥大防止)
+let maxRefsCount = 20              // refs 配列の要素数上限(SECURITY item 2: text だけでなく refs も肥大させ得る)
+let maxRefLength = 200             // refs 各要素の文字数上限
+let maxCardTitleLength = 200       // fleet_create_card の title 上限(M1: 無制限な Agent 入力の防止)
+let maxMemoryKindLength = 32       // fleet_remember の kind 上限(M1)
+let maxPeerNameLength = 100        // fleet_message/fleet_handoff の to(宛先ピア名)上限(M1)
 
 // MARK: - I/O
 
@@ -291,7 +312,7 @@ let toolDefs: [[String: Any]] = [
             "properties": [
                 "text": ["type": "string", "description": "The note to share (max 16 KB)."],
                 "kind": ["type": "string", "description": "decision | blocker | artifact | question | note (default note)."],
-                "refs": ["type": "array", "items": ["type": "string"], "description": "Related file paths / PR URLs / card ids."]
+                "refs": ["type": "array", "items": ["type": "string"], "description": "Related file paths / PR URLs / card ids (max 20; each truncated to 200 chars)."]
             ],
             "required": ["text"]
         ]
@@ -458,8 +479,13 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             sendResult(id, textContent("Note too large (\(text.utf8.count) bytes; max \(maxRememberBytes)). Summarize or split it.", isError: true))
             return
         }
-        let kind = (arguments["kind"] as? String)?.lowercased()
-        let refs = arguments["refs"] as? [String]
+        // kind も text/refs と同様に無制限だと memory.jsonl に任意の長さの値を書き込める(M1)。
+        let kind = (arguments["kind"] as? String).map { String($0.lowercased().prefix(maxMemoryKindLength)) }
+        // refs は text と違ってバイト上限のチェックが無いため、要素数と各要素長を切り詰める
+        // (SECURITY item 2: 無制限だと memory.jsonl に任意の巨大な行を追記できてしまう)。
+        let refs = (arguments["refs"] as? [String]).map { raw in
+            raw.prefix(maxRefsCount).map { String($0.prefix(maxRefLength)) }
+        }
         appendEntry(text, kind: kind, refs: refs)
         sendResult(id, textContent("Saved to shared memory."))
 
@@ -483,9 +509,11 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         sendResult(id, textContent("Agents sharing this channel:\n" + lines.joined(separator: "\n")))
 
     case "fleet_message", "fleet_handoff":
-        guard let to = (arguments["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty else {
+        guard let rawTo = (arguments["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTo.isEmpty else {
             sendResult(id, textContent("to (peer name) is required", isError: true)); return
         }
+        // to は Agent が渡す任意の文字列(SECURITY: 無制限だと outbox.jsonl に肥大した宛先を書ける, M1)。
+        let to = String(rawTo.prefix(maxPeerNameLength))
         guard let text = arguments["text"] as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             sendResult(id, textContent("text is required", isError: true)); return
@@ -541,7 +569,9 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         sendResult(id, textContent("Released \"\(resource)\"."))
 
     case "fleet_locks":
-        let locks = readLocks(channelDir)
+        // writeLocks は fleet_claim/fleet_release 内で withChannelLock 下にある(全書き換え)。
+        // この読み取りだけがロック無しだったので、同じロックを取って揃える(SECURITY item 4)。
+        let locks = withChannelLock(channelDir) { readLocks(channelDir) }
         if locks.isEmpty { sendResult(id, textContent("No advisory locks are held in this channel.")); return }
         let lines = locks.map { (res, info) -> String in
             let who = (info["holderName"] as? String) ?? "?"
@@ -570,12 +600,28 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         sendResult(id, textContent(out))
 
     case "fleet_create_card":
-        guard let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+        guard let rawTitle = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTitle.isEmpty else {
             sendResult(id, textContent("title is required", isError: true)); return
         }
+        // title も Agent が渡す任意の文字列(SECURITY: 無制限だと board-intents.jsonl / 盤面に
+        // 肥大したタイトルを書ける, M1)。
+        let title = String(rawTitle.prefix(maxCardTitleLength))
         var intent: [String: Any] = ["kind": "create_card", "title": title]
         if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
-        if let dir = arguments["dir"] as? String, !dir.isEmpty { intent["dir"] = dir }
+        if let dir = arguments["dir"] as? String, !dir.isEmpty {
+            // dir は Agent が渡す任意の文字列。許可リストは正当な用途を壊すので作らないが、
+            // 形状(絶対パス)と実在(既存ディレクトリ)くらいは検証する(SECURITY item 3) —
+            // でなければ ~/.ssh のような無関係な既存パスをそのまま新カードの作業ディレクトリに
+            // 仕込める。より厳密なポリシー(プロジェクトルート配下への制限)は follow-up。
+            var isDirectory: ObjCBool = false
+            guard dir.hasPrefix("/"),
+                  FileManager.default.fileExists(atPath: dir, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                sendResult(id, textContent("dir must be an absolute path to an existing directory.", isError: true))
+                return
+            }
+            intent["dir"] = dir
+        }
         appendBoardIntent(intent)
         sendResult(id, textContent("Requested new card \"\(title)\". It will appear on the board and join this channel shortly (check fleet_board)."))
 

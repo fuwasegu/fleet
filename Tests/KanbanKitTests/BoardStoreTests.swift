@@ -331,6 +331,39 @@ struct BoardStoreTests {
         #expect(ChannelStore.readBinding(cardID: b.id)?.channel == nil)
     }
 
+    /// FIX C1: binding.json の自己改竄(agent がシェル権限で自分の binding.json を
+    /// 別チャンネルの UUID へ書き換える)を、reconcileBindings() が真実(SwiftData 上の
+    /// 実際の所属)へ強制的に書き戻す。
+    @Test func reconcileBindingsRestoresForgedBinding() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "A")
+        let a = try store.addCard(title: "a", to: col)
+        let b = try store.addCard(title: "b", to: col)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        // agent がシェルで binding.json を別チャンネルの(有効な形の)UUID へ改竄した状況を再現。
+        let forgedChannelID = UUID()
+        ChannelStore.writeBinding(cardID: a.id, channel: forgedChannelID, name: a.title)
+        #expect(ChannelStore.readBinding(cardID: a.id)?.channel == forgedChannelID.uuidString)
+
+        store.reconcileBindings()
+
+        #expect(ChannelStore.readBinding(cardID: a.id)?.channel == ch.id.uuidString)
+    }
+
+    /// FIX C1: 削除済みカードの binding ディレクトリが残っていても reconcileBindings() が片付ける。
+    @Test func reconcileBindingsRemovesBindingForDeletedCard() throws {
+        let ghostCardID = UUID()
+        ChannelStore.writeBinding(cardID: ghostCardID, channel: UUID(), name: "ghost")
+        #expect(ChannelStore.readBinding(cardID: ghostCardID) != nil)
+
+        let store = try makeStore()
+        store.reconcileBindings()
+
+        #expect(ChannelStore.readBinding(cardID: ghostCardID) == nil)
+    }
+
     /// deleteEntry はデコード不能な行を巻き添えで消さない(MEDIUM-3)。
     @Test func deleteEntryPreservesCorruptLines() throws {
         let chID = UUID()
@@ -360,6 +393,22 @@ struct BoardStoreTests {
         let texts = ChannelStore.entries(for: dst).map(\.text)
         #expect(texts.count == 3)
         #expect(Set(texts) == Set(["from-dst", "from-src-1", "from-src-2"]))
+    }
+
+    /// relocateAndRemove は src の withChannelLock 下で mergeMemory を呼ぶ。mergeMemory が
+    /// 内部でロック無し版の読み取りを使わず誤ってロック版 rawLines を呼ぶと、同一チャンネルの
+    /// .lock を二重に取ろうとして自己デッドロックする(SECURITY item 4 の回帰防止)。
+    @Test func relocateAndRemoveDoesNotDeadlockAndMovesEntries() throws {
+        let src = UUID(); let dst = UUID()
+        defer { ChannelStore.removeDir(for: src); ChannelStore.removeDir(for: dst) }
+        ChannelStore.append("from-src", author: "s", to: src)
+        ChannelStore.append("from-dst", author: "d", to: dst)
+
+        ChannelStore.relocateAndRemove(from: src, into: dst)
+
+        let texts = ChannelStore.entries(for: dst).map(\.text)
+        #expect(Set(texts) == Set(["from-src", "from-dst"]))
+        #expect(!FileManager.default.fileExists(atPath: ChannelStore.dir(for: src).path))
     }
 
     /// outbox の追記・読み出しと配信カーソルが往復する。

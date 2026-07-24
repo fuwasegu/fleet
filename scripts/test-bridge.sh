@@ -103,4 +103,53 @@ grep -q '33333333-3333-3333-3333-333333333333' "$OBX" || fail "outbox did not re
 # status ファイルが書かれていること
 [ -f "$ROOT/channels/$CHAN/status-$CARD.json" ] || fail "status file not written"
 
+# --- SECURITY item 1: binding.json の channel が UUID でない(パス脱出狙い)場合、
+#     「無所属」に丸められてクラッシュもパス脱出もしないこと。 ---
+ROOT2="$(mktemp -d)"
+CARD2="44444444-4444-4444-4444-444444444444"
+mkdir -p "$ROOT2/cards/$CARD2"
+printf '{"channel":"../../../tmp/evil-channel","name":"cardX"}' > "$ROOT2/cards/$CARD2/binding.json"
+OUT2="$(mktemp)"
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fleet_recall","arguments":{}}}'
+} | "$BRIDGE" --root "$ROOT2" --card "$CARD2" > "$OUT2"
+grep -q 'not currently in a shared channel' "$OUT2" || fail "malicious channel id in binding.json was not rejected"
+[ -e "$ROOT2/tmp" ] && fail "path traversal via channel id escaped the fleet root"
+
+# --- SECURITY item 1: 不正な --card 引数(パス脱出狙い)もクラッシュせず「無所属」になること。 ---
+OUT3="$(mktemp)"
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fleet_recall","arguments":{}}}'
+} | "$BRIDGE" --root "$ROOT2" --card "../../../etc/passwd" > "$OUT3"
+grep -q 'not currently in a shared channel' "$OUT3" || fail "malicious --card argument was not rejected"
+
+# --- SECURITY item 3: fleet_create_card の dir は絶対パス+実在ディレクトリのみ許可。 ---
+OUT4="$(mktemp)"
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"bad dir","dir":"relative/path"}}}'
+  echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"missing dir","dir":"/no/such/dir/hopefully-not-real"}}}'
+  echo "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"fleet_create_card\",\"arguments\":{\"title\":\"good dir\",\"dir\":\"$ROOT\"}}}"
+} | "$BRIDGE" --root "$ROOT" --card "$CARD" > "$OUT4"
+[ "$(grep -c 'dir must be an absolute path' "$OUT4")" = "2" ] || fail "relative/nonexistent dir was not rejected (want 2 rejections)"
+GOOD_DIR_LINE="$(grep '"id":4' "$OUT4" || true)"
+echo "$GOOD_DIR_LINE" | grep -q 'Requested new card' || fail "valid absolute existing dir was wrongly rejected"
+echo "$GOOD_DIR_LINE" | grep -q 'good dir'          || fail "valid absolute existing dir was wrongly rejected (wrong card)"
+
+# --- SECURITY item 2: fleet_remember の refs は件数(20)と各要素長(200)が切り詰められる。 ---
+REFS_JSON="$(python3 -c "import json; print(json.dumps(['ref-' + str(i) + ('X' * 250) for i in range(25)]))")"
+OUT5="$(mktemp)"
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fleet_remember\",\"arguments\":{\"text\":\"refs cap test\",\"refs\":$REFS_JSON}}}"
+} | "$BRIDGE" --root "$ROOT" --card "$CARD" > "$OUT5"
+grep -q 'Saved to shared memory' "$OUT5" || fail "refs-cap remember was not saved"
+LAST_LINE="$(tail -n1 "$ROOT/channels/$CHAN/memory.jsonl")"
+REFS_COUNT="$(printf '%s' "$LAST_LINE" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("refs", [])))')"
+[ "$REFS_COUNT" = "20" ] || fail "refs array was not capped to 20 elements (got $REFS_COUNT)"
+MAXLEN="$(printf '%s' "$LAST_LINE" | python3 -c 'import json,sys; refs=json.load(sys.stdin).get("refs", []); print(max((len(r) for r in refs), default=0))')"
+[ "$MAXLEN" -le 200 ] || fail "a ref element was not truncated to 200 chars (got $MAXLEN)"
+
 echo "fleet-bridge protocol test: OK"

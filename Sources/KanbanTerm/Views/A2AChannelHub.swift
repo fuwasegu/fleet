@@ -29,6 +29,9 @@ final class A2AChannelHub {
 
     /// 現在のチャンネル集合に watcher を合わせる。接続/解除で呼ぶ(冪等)。
     func sync(channelIDs: [UUID]) {
+        // C1 緩和: binding.json の自己改竄をここ(起動時/接続/解除。ファイル監視イベント毎では
+        // ない=コスト低)で真実へ強制的に戻す。件数はカード数程度なので毎回呼んでも安価。
+        if let context { BoardStore(context: context).reconcileBindings() }
         let ids = Set(channelIDs)
         for (id, w) in watchers where !ids.contains(id) { w.cancel(); watchers[id] = nil }
         for id in ids where watchers[id] == nil { startWatch(id) }
@@ -110,17 +113,24 @@ final class A2AChannelHub {
     }
 
     /// メッセージの宛先カード id を解決する。toID があればそれ、無ければチャンネル内で名前一致。
+    /// どちらの経路でも、宛先は必ず `channelID` に所属するカードに限定する(他チャンネル/無関係カードへの
+    /// 注入を防ぐ)。自分自身への送信も除外する。
     private func resolveTarget(_ m: OutboxMessage, channelID: UUID, store: BoardStore) -> UUID? {
-        if let toID = m.toID, let uuid = UUID(uuidString: toID) { return uuid }
         guard let ch = store.channel(withID: channelID) else { return nil }
+        if let toID = m.toID, let uuid = UUID(uuidString: toID) {
+            return ch.cards.first { $0.id == uuid && $0.id.uuidString != m.fromID }?.id
+        }
         let target = m.to.lowercased()
         return ch.cards.first { $0.title.lowercased() == target && $0.id.uuidString != m.fromID }?.id
     }
 
     /// 注入する1行。provenance を明示し、複数行は1行に畳む(改行=送信になるため)。
+    /// body/送信者名はいずれも Agent 制御下のテキストなので、ANSI/OSC エスケープ注入や
+    /// 偽装 prefix を防ぐため必ずサニタイズ・長さ制限を通す。
     private static func frame(_ m: OutboxMessage) -> String {
         let kind = m.kind == "handoff" ? "handoff" : "message"
-        let body = m.text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
-        return "[A2A \(kind) from \(m.from)] \(body)"
+        let from = ChannelStore.sanitizeForTerminal(m.from, maxLength: 60)
+        let body = ChannelStore.sanitizeForTerminal(m.text)
+        return "[A2A \(kind) from \(from)] \(body)"
     }
 }
