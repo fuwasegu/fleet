@@ -445,7 +445,7 @@ public struct BoardStore {
                 return .failure(WorktreeService.GitError(message: "not a git repository: \(cwd)"))
             }
             let baseRef = WorktreeService.resolveBase(base, repoRoot: repoRoot)
-            let path = try WorktreeService.create(repoRoot: repoRoot, branch: branch, baseRef: baseRef, baseDir: "../.fleet-worktrees")
+            let path = try WorktreeService.create(repoRoot: repoRoot, branch: branch, baseRef: baseRef, baseDir: WorktreeService.defaultWorktreeBaseDir)
             return .success((repoRoot, path))
         } catch let e as WorktreeService.GitError {
             return .failure(e)

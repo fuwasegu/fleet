@@ -38,15 +38,6 @@ enum ClaudeSessionsService {
         return (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
     }
 
-    /// 指定 cwd の project ディレクトリに、このセッション id の jsonl が既にあるか。
-    /// 自動復帰で「--resume(既存) か --session-id(新規) か」を決めるのに使う。
-    static func sessionExists(id: String, cwd: String, configDir: String? = nil) -> Bool {
-        let base = projectsBase(configDir: configDir)
-        let dir = (base as NSString).appendingPathComponent(projectDirName(for: cwd))
-        let path = (dir as NSString).appendingPathComponent("\(id).jsonl")
-        return FileManager.default.fileExists(atPath: path)
-    }
-
     /// `~/.claude/projects/`(または `configDir` 配下)の「どの project ディレクトリでもいいから」
     /// このセッション id の jsonl があるか。`claude --resume <uuid>` は cwd に関係なく id だけで
     /// 解決できるため、worktree カード(cwd がその都度変わる)の自動復帰判定はこちらを使う。

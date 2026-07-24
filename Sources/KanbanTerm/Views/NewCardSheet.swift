@@ -71,7 +71,7 @@ struct NewCardSheet: View {
 
     private var predictedWorktreePath: String {
         guard let directory else { return "" }
-        return WorktreeService.worktreePath(repoRoot: directory, branch: branchName, baseDir: "../.fleet-worktrees")
+        return WorktreeService.worktreePath(repoRoot: directory, branch: branchName, baseDir: WorktreeService.defaultWorktreeBaseDir)
     }
 
     var body: some View {
@@ -280,7 +280,7 @@ struct NewCardSheet: View {
                 let path = try await Task.detached(priority: .userInitiated) {
                     try WorktreeService.create(
                         repoRoot: repoRoot, branch: branch, baseRef: baseRef,
-                        baseDir: "../.fleet-worktrees"
+                        baseDir: WorktreeService.defaultWorktreeBaseDir
                     )
                 }.value
 

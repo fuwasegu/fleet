@@ -342,15 +342,15 @@ final class TerminalSessions {
             var cmd = "claude " + (exists ? "--resume \(sid)" : "--session-id \(sid)")
             if let cfgDir, !cfgDir.isEmpty {
                 let expandedCfgDir = (cfgDir as NSString).expandingTildeInPath
-                cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(expandedCfgDir)) " + cmd
+                cmd = "CLAUDE_CONFIG_DIR=\(WorktreeService.shellQuote(expandedCfgDir)) " + cmd
             }
             // A2A: 常に fleet-bridge(MCP) を接続。未接続でもツールは載り、あとから繋いだ瞬間に有効化。
             if let cfgPath = writeBridgeConfig(cardID: cardID, cardTitle: card.title, channelID: card.channel?.id) {
-                cmd += " --mcp-config \(shellQuote(cfgPath))"
+                cmd += " --mcp-config \(WorktreeService.shellQuote(cfgPath))"
                 // nudge はファイルに書き出し "$(cat …)" で渡す。巨大な文字列を「キー入力」として
                 // 打ち込むと端末の1行入力上限(MAX_CANON≈1024B)を超えて途中で止まるため。
                 let promptPath = writePromptFile(cardID: cardID)
-                cmd += " --append-system-prompt \"$(cat \(shellQuote(promptPath)))\""
+                cmd += " --append-system-prompt \"$(cat \(WorktreeService.shellQuote(promptPath)))\""
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -365,8 +365,8 @@ final class TerminalSessions {
             var cmd = "codex"
             if let sid = codexEffectiveSession(card) { cmd += " resume \(sid)" }
             if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
-                cmd += " -c " + shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
-                cmd += " -c " + shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
+                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
+                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -440,11 +440,6 @@ final class TerminalSessions {
 
     private static func tomlString(_ s: String) -> String {
         "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
-    }
-
-    /// インタラクティブシェルへ打つ文字列の単一引用符クオート。
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// 設定フォントを開いている全ターミナルへ即時反映する。
