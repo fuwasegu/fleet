@@ -519,4 +519,31 @@ public enum ChannelStore {
         let url = dir(for: channelID).appendingPathComponent("mcp-\(cardID.uuidString).json")
         try? FileManager.default.removeItem(at: url)
     }
+
+    // MARK: - ターミナル注入サニタイズ
+
+    /// A2A outbox のメッセージ本文/送信者名など「Agent が書いたテキスト」を、
+    /// 受信側カードの live ターミナルへ `term.send` で注入する前に必ず通す。
+    /// C0/C1 制御文字(ESC 含む)を除去して ANSI/OSC エスケープの注入を防ぎ、
+    /// 空白を畳んでから maxLength で切り詰める(1件で大量出力を流し込ませない)。
+    public static func sanitizeForTerminal(_ s: String, maxLength: Int = 2000) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x1F, 0x7F, 0x80...0x9F:
+                scalars.append(" ")
+            default:
+                scalars.append(scalar)
+            }
+        }
+        let replaced = String(scalars)
+        let collapsed = replaced
+            .split(whereSeparator: { $0 == " " || $0.isWhitespace })
+            .joined(separator: " ")
+        if collapsed.count > maxLength {
+            let truncated = String(collapsed.prefix(maxLength))
+            return truncated + "…"
+        }
+        return collapsed
+    }
 }

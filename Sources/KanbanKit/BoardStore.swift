@@ -314,16 +314,26 @@ public struct BoardStore {
         guard !intents.isEmpty else { return }
         var applied = ChannelStore.appliedWorktreeIntentIDs(for: channelID)
         for intent in intents where !applied.contains(intent.id) {
-            let result = performWorktreeIntent(intent)
+            let result = performWorktreeIntent(intent, channelID: channelID)
             ChannelStore.writeWorktreeResult(result, for: channelID)
             applied.insert(intent.id)
             ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID)
         }
     }
 
-    private func performWorktreeIntent(_ intent: WorktreeIntent) -> WorktreeResult {
+    /// `intent.fromCardID` は必ず `channelID` に所属するカードでなければならない
+    /// (board intent の move/create と同じく `ch.cards` でスコープする)。所属チェックを
+    /// 外すと、あるチャンネルで偽装した intent が無関係カードの worktree を作成/再バインド
+    /// できてしまう。
+    private func performWorktreeIntent(_ intent: WorktreeIntent, channelID: UUID) -> WorktreeResult {
+        guard let ch = channel(withID: channelID) else {
+            return WorktreeResult(id: intent.id, ok: false, error: "channel not found")
+        }
         guard let fromUUID = UUID(uuidString: intent.fromCardID), let card = card(withID: fromUUID) else {
             return WorktreeResult(id: intent.id, ok: false, error: "card not found")
+        }
+        guard ch.cards.contains(where: { $0.id == fromUUID }) else {
+            return WorktreeResult(id: intent.id, ok: false, error: "card is not a member of this channel")
         }
         if card.isFleetOwnedWorktree, card.worktreePath != nil {
             return WorktreeResult(id: intent.id, ok: false, error: "this card already has a Fleet-managed worktree")
