@@ -36,12 +36,23 @@ extension WorktreeService {
         public let message: String
     }
 
+    private static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// `git -C <dir> <args...>` を実行し、非0終了で `GitError` を投げる。stdout は trim して返す。
+    ///
+    /// ログイン zsh 経由で実行することで、`/usr/bin/env` 直接起動では欠落する Homebrew 等の
+    /// ユーザー PATH を継承する(git-lfs の filter.lfs.process 解決に必要)。
+    /// zsh 内で git がコマンド列の唯一/最後のコマンドなので、`terminationStatus` は git の
+    /// 終了コードのまま(merge-base --is-ancestor 等の 0/1 判定はそのまま機能する)。
     @discardableResult
     public static func run(_ args: [String], in dir: String) throws -> String {
+        let argv = ["git", "-C", dir] + args
+        let command = argv.map(shellQuote).joined(separator: " ")
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["git", "-C", dir] + args
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-lc", command]
         let out = Pipe()
         let err = Pipe()
         p.standardOutput = out
