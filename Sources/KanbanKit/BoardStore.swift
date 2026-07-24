@@ -304,6 +304,55 @@ public struct BoardStore {
         if didApply { ChannelStore.writeAppliedIntentIDs(applied, for: channelID) }
     }
 
+    /// Agent の worktree 作成 intent(worktree-intents.jsonl)を適用する。
+    /// 検証済みの WorktreeService.create を単一の git 実行経路として使い、成功したら
+    /// カードを Fleet 管理 worktree へ再バインドする(setWorktree)。適用済み id は
+    /// board intent と同じ「applied 集合」パターンで記録し、成否に関わらず再適用しない
+    /// (二重 create による重複エラー/二重バインドを防ぐ)。
+    public func applyWorktreeIntents(for channelID: UUID) {
+        let intents = ChannelStore.worktreeIntents(for: channelID)
+        guard !intents.isEmpty else { return }
+        var applied = ChannelStore.appliedWorktreeIntentIDs(for: channelID)
+        var didApply = false
+        for intent in intents where !applied.contains(intent.id) {
+            applied.insert(intent.id); didApply = true
+            let result = performWorktreeIntent(intent)
+            ChannelStore.writeWorktreeResult(result, for: channelID)
+        }
+        if didApply { ChannelStore.writeAppliedWorktreeIntentIDs(applied, for: channelID) }
+    }
+
+    private func performWorktreeIntent(_ intent: WorktreeIntent) -> WorktreeResult {
+        guard let fromUUID = UUID(uuidString: intent.fromCardID), let card = card(withID: fromUUID) else {
+            return WorktreeResult(id: intent.id, ok: false, error: "card not found")
+        }
+        if card.isFleetOwnedWorktree, card.worktreePath != nil {
+            return WorktreeResult(id: intent.id, ok: false, error: "this card already has a Fleet-managed worktree")
+        }
+        guard let cwd = card.effectiveCwd else {
+            return WorktreeResult(id: intent.id, ok: false, error: "card has no working directory; not a git repository")
+        }
+        let repoRoot: String
+        if let r = card.repoRoot {
+            repoRoot = r
+        } else if let r = try? WorktreeService.run(["rev-parse", "--show-toplevel"], in: cwd), !r.isEmpty {
+            repoRoot = r
+        } else {
+            return WorktreeResult(id: intent.id, ok: false, error: "not a git repository: \(cwd)")
+        }
+        let base: WorktreeBase = intent.base == "default" ? .defaultBranch : .current
+        do {
+            let path = try WorktreeService.create(repoRoot: repoRoot, branch: intent.branch, base: base, baseDir: "../.fleet-worktrees")
+            try setWorktree(card, repoRoot: repoRoot, worktreePath: path,
+                            branch: WorktreeService.sanitizeBranch(intent.branch), fleetOwned: true)
+            return WorktreeResult(id: intent.id, ok: true, path: path)
+        } catch let e as WorktreeService.GitError {
+            return WorktreeResult(id: intent.id, ok: false, error: e.message)
+        } catch {
+            return WorktreeResult(id: intent.id, ok: false, error: "\(error)")
+        }
+    }
+
     /// board.json スナップショット(fleet_board 用)を書く。差分時のみ書き込む。
     public func writeBoardSnapshot(for channelID: UUID) {
         guard let ch = channel(withID: channelID) else { return }

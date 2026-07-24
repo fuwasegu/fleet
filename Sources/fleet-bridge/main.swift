@@ -211,6 +211,42 @@ func appendBoardIntent(_ entry: [String: Any]) {
     }
 }
 
+/// worktree 作成 intent(worktree-intents.jsonl)を追記する。git 実行は Fleet 本体側
+/// (BoardStore.applyWorktreeIntents)が検証済み WorktreeService で行う — bridge は
+/// KanbanKit にリンクできず、また誤った/未検証の git 操作を Agent 権限で直接叩かせない設計。
+func appendWorktreeIntent(branch: String, base: String) -> String {
+    let intentID = UUID().uuidString
+    let iso = ISO8601DateFormatter().string(from: Date())
+    let entry: [String: Any] = [
+        "id": intentID, "fromCardID": cardID, "branch": branch, "base": base, "createdAt": iso
+    ]
+    guard let d = try? JSONSerialization.data(withJSONObject: entry),
+          let s = String(data: d, encoding: .utf8) else { return intentID }
+    let line = Data((s + "\n").utf8)
+    withResolvedChannelLocked { channelDir in
+        let url = channelDir.appendingPathComponent("worktree-intents.jsonl")
+        let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
+        guard fd >= 0 else { return }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try? h.write(contentsOf: line)
+        try? h.close()
+    }
+    return intentID
+}
+
+/// worktree-results/<intentID>.json を Fleet 本体が書くまでポーリングする(0.5秒間隔・最大30回≒15秒)。
+func pollWorktreeResult(_ channelDir: URL, intentID: String) -> [String: Any]? {
+    let url = channelDir.appendingPathComponent("worktree-results/\(intentID).json")
+    for _ in 0..<30 {
+        if let d = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            return obj
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+    return nil
+}
+
 func readBoardSnapshot(_ channelDir: URL) -> [String: Any]? {
     let url = channelDir.appendingPathComponent("board.json")
     guard let d = try? Data(contentsOf: url),
@@ -355,6 +391,18 @@ let toolDefs: [[String: Any]] = [
         "name": "fleet_worktree_info",
         "description": "Get this card's Fleet-managed git worktree binding: repo root, worktree path, branch, and whether Fleet owns this worktree. Read-only — use it to learn where your working directory lives on disk. Does not create or delete worktrees.",
         "inputSchema": ["type": "object", "properties": [:]]
+    ],
+    [
+        "name": "fleet_worktree_create",
+        "description": "Create a new git worktree for YOUR OWN card and rebind this card to it. Fleet validates the request and runs the actual git worktree creation on your behalf (this tool does not run git directly), then returns the new worktree's absolute path. IMPORTANT: this does not move your shell — the tool only creates the worktree and rebinds the card; you must `cd` into the returned path yourself afterward. Fails if this card already has a Fleet-managed worktree, or if the card's directory is not (in) a git repository.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "branch": ["type": "string", "description": "New branch name to create."],
+                "base": ["type": "string", "enum": ["current", "default"], "description": "Branch point: 'current' (this repo's current HEAD) or 'default' (the repo's default branch, e.g. main/master). Defaults to 'current'."]
+            ],
+            "required": ["branch"]
+        ]
     ]
 ]
 
@@ -560,6 +608,24 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             jsonText = "{\"repoRoot\":null,\"worktreePath\":null,\"branch\":null,\"isFleetOwnedWorktree\":false}"
         }
         sendResult(id, textContent(jsonText))
+
+    case "fleet_worktree_create":
+        guard let branch = (arguments["branch"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
+            sendResult(id, textContent("branch is required", isError: true)); return
+        }
+        let base = (arguments["base"] as? String) == "default" ? "default" : "current"
+        let intentID = appendWorktreeIntent(branch: branch, base: base)
+        if let result = pollWorktreeResult(channelDir, intentID: intentID) {
+            let ok = (result["ok"] as? Bool) ?? false
+            if ok, let path = result["path"] as? String {
+                sendResult(id, textContent("Worktree created at \(path). This tool does not move your shell — cd into it yourself: `cd \(path)`"))
+            } else {
+                let err = (result["error"] as? String) ?? "unknown error"
+                sendResult(id, textContent("Worktree creation failed: \(err)", isError: true))
+            }
+        } else {
+            sendResult(id, textContent("Worktree creation timed out waiting for Fleet to respond. Check that Fleet is running; the request may still complete shortly — check fleet_worktree_info.", isError: true))
+        }
 
     default:
         sendResult(id, textContent("Unknown tool: \(name)", isError: true))

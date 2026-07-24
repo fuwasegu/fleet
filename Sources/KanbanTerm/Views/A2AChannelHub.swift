@@ -66,8 +66,9 @@ final class A2AChannelHub {
         guard let context else { return }
         let store = BoardStore(context: context)
         store.applyBoardIntents(for: channelID)                 // Agent の盤面操作(create/move)を適用
+        store.applyWorktreeIntents(for: channelID)              // Agent の worktree 作成 intent を適用
         if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期
-        store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット
+        store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット(worktree 反映)
         deliverOutbox(channelID, store: store)                  // outbox の push 配信
     }
 
