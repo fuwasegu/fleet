@@ -47,11 +47,29 @@ extension WorktreeService {
         p.standardOutput = out
         p.standardError = err
         try p.run()
+
+        // stdout/stderr を並行して読み切ってから waitUntilExit する。
+        // 大量出力(例: status --porcelain が数千件の untracked を返す)でパイプの
+        // OS バッファ(~64KB)が埋まると、先に waitUntilExit してしまうとプロセス側が
+        // write でブロックし続けてデッドロックする。読み取りを先に(同時に)進めることで防ぐ。
+        var outData = Data()
+        var errData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().async {
+            outData = out.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global().async {
+            errData = err.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.wait()
         p.waitUntilExit()
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
+
         let o = String(data: outData, encoding: .utf8) ?? ""
         if p.terminationStatus != 0 {
-            let errData = err.fileHandleForReading.readDataToEndOfFile()
             let e = String(data: errData, encoding: .utf8) ?? ""
             throw GitError(message: e.isEmpty ? o : e)
         }
@@ -99,16 +117,33 @@ extension WorktreeService {
     }
 
     public static func removalRisk(worktreePath: String, repoRoot: String, inUse: Bool) -> RemovalRisk {
-        let porcelain = (try? run(["status", "--porcelain"], in: worktreePath)) ?? ""
+        // fail-closed: git status が失敗する(例: そのカードの実行中エージェントが同じ
+        // worktree で git を操作していて index.lock が競合している)場合、クリーンかどうか
+        // 判定できないので "" (クリーン扱い) にフォールバックしてはいけない。安全側に倒して dirty とみなす。
+        // ただし inUse による使用中判定はそれよりも優先度が高いので維持する。
+        guard let porcelain = try? run(["status", "--porcelain"], in: worktreePath) else {
+            return inUse ? .inUse : .dirty
+        }
         let hasUpstream = (try? run(["rev-parse", "--abbrev-ref", "@{u}"], in: worktreePath)) != nil
-        let ahead = Int((try? run(["rev-list", "--count", "@{u}..HEAD"], in: worktreePath)) ?? "0") ?? 0
         let def = defaultBranch(repoRoot: repoRoot)
         // merge-base --is-ancestor は終了コードのみで判定する: 成功(exit 0)= HEAD が def の祖先。
         // 非0終了(祖先でない)は run が throw するだけで、クラッシュにはならない。
         let merged = (try? run(["merge-base", "--is-ancestor", "HEAD", def], in: worktreePath)) != nil
-        // upstream があれば ahead カウントを、無ければ「default ブランチにマージ済みか」を使う。
-        let mergedIntoDefault = hasUpstream ? true : merged
-        let aheadCount = hasUpstream ? ahead : 0
+        let mergedIntoDefault: Bool
+        let aheadCount: Int
+        if hasUpstream {
+            // fail-closed: rev-list --count が失敗する/パースできない場合、ahead=0 (push 済み扱い)に
+            // フォールバックしてはいけない。安全側に倒して unpushed とみなす。
+            guard let aheadStr = try? run(["rev-list", "--count", "@{u}..HEAD"], in: worktreePath),
+                  let ahead = Int(aheadStr) else {
+                return inUse ? .inUse : .unpushed
+            }
+            aheadCount = ahead
+            mergedIntoDefault = true
+        } else {
+            aheadCount = 0
+            mergedIntoDefault = merged
+        }
         return classifyRemoval(porcelain: porcelain, aheadCount: aheadCount, mergedIntoDefault: mergedIntoDefault, inUse: inUse)
     }
 

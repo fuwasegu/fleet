@@ -36,6 +36,32 @@ import Foundation
         #expect(FileManager.default.fileExists(atPath: path)) // 残っている
     }
 
+    /// fail-closed 回帰テスト: `git status --porcelain` 自体が失敗する状況
+    /// (index.lock 競合など、実行中エージェントが同じ worktree で git を触っているケースの模擬) で、
+    /// removalRisk が "" (クリーン) にフォールバックせず .dirty を返す(= 撤去をブロックする)ことを確認する。
+    @Test func statusFailureBlocksRemoval() throws {
+        let repo = try tmpRepo()
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/lockcheck", base: .current, baseDir: "../.fleet-worktrees")
+
+        // worktree の gitdir (.git/worktrees/<name>/index) のパーミッションを剥奪し、
+        // git status --porcelain を確実に失敗させる。
+        let gitFileContents = try String(contentsOfFile: path + "/.git", encoding: .utf8)
+        let gitDirLine = gitFileContents.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(gitDirLine.hasPrefix("gitdir: "))
+        let gitDir = String(gitDirLine.dropFirst("gitdir: ".count))
+        let indexPath = gitDir + "/index"
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: indexPath)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: indexPath) }
+
+        // まず本当に git status --porcelain が失敗することを確認する(前提の検証)。
+        #expect(throws: WorktreeService.GitError.self) {
+            try WorktreeService.run(["status", "--porcelain"], in: path)
+        }
+
+        // fail-closed: 判定不能を「クリーン」に倒さず、安全側の .dirty として扱うこと。
+        #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
+    }
+
     @Test func duplicateBranchRejected() throws {
         let repo = try tmpRepo()
         _ = try WorktreeService.create(repoRoot: repo, branch: "dup", base: .current, baseDir: "../.fleet-worktrees")
