@@ -231,7 +231,17 @@ public enum ChannelStore {
     // MARK: - 読み取り
 
     /// memory.jsonl の生の行(空行を除く)。デコード可否に関わらず全行を返す。
+    /// deleteEntry が同ファイルを全書き換えするため(SECURITY item 4)、チャンネルロック下で
+    /// 読む — O_APPEND の追記中に読んでも壊れるのは末尾1行だけで自己修復するが、全書き換えの
+    /// 最中に読むと(rename の間隙で)行を大量に失いかねず、自己修復では済まないため。
     static func rawLines(for id: UUID) -> [String] {
+        withChannelLock(dir(for: id)) { rawLinesUnlocked(for: id) }
+    }
+
+    /// rawLines のロック無し版。すでに withChannelLock 下にある呼び出し元専用
+    /// (deleteEntry / mergeMemory)。ここから rawLines(ロック版)を呼ぶと同一チャンネルの
+    /// .lock を二重に取ろうとして自己デッドロックするため、内部読み取りは必ずこちらを使う。
+    private static func rawLinesUnlocked(for id: UUID) -> [String] {
         guard let text = try? String(contentsOf: memoryFile(for: id), encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     }
@@ -275,7 +285,8 @@ public enum ChannelStore {
         withChannelLock(dir(for: id)) {
             // 生の行を保持したまま、対象エントリの行だけ除去する。
             // デコード不能な行は「消したい対象ではない」ので温存する(MEDIUM-3)。
-            let kept = rawLines(for: id).filter { line in
+            // 既に withChannelLock 下にいるため rawLinesUnlocked を使う(二重ロック回避)。
+            let kept = rawLinesUnlocked(for: id).filter { line in
                 guard let d = line.data(using: .utf8),
                       let e = try? dec.decode(ChannelEntry.self, from: d) else { return true }
                 return e.id != entryID
@@ -287,7 +298,9 @@ public enum ChannelStore {
     /// src の全行を dst 末尾へ移す(チャンネル合流時)。ロック下で追記するので
     /// デコード不能行も含めて温存され、dst への並行追記とも競合しない。
     public static func mergeMemory(from src: UUID, into dst: UUID) {
-        let srcLines = rawLines(for: src)
+        // relocateAndRemove から呼ばれるときは既に src の withChannelLock 下にあるため、
+        // rawLinesUnlocked を使う(二重ロック回避)。src ロックの保持は呼び出し側の責務。
+        let srcLines = rawLinesUnlocked(for: src)
         guard !srcLines.isEmpty else { return }
         ensureDir(dst)
         let body = srcLines.joined(separator: "\n") + "\n"

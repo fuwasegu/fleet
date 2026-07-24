@@ -362,6 +362,22 @@ struct BoardStoreTests {
         #expect(Set(texts) == Set(["from-dst", "from-src-1", "from-src-2"]))
     }
 
+    /// relocateAndRemove は src の withChannelLock 下で mergeMemory を呼ぶ。mergeMemory が
+    /// 内部でロック無し版の読み取りを使わず誤ってロック版 rawLines を呼ぶと、同一チャンネルの
+    /// .lock を二重に取ろうとして自己デッドロックする(SECURITY item 4 の回帰防止)。
+    @Test func relocateAndRemoveDoesNotDeadlockAndMovesEntries() throws {
+        let src = UUID(); let dst = UUID()
+        defer { ChannelStore.removeDir(for: src); ChannelStore.removeDir(for: dst) }
+        ChannelStore.append("from-src", author: "s", to: src)
+        ChannelStore.append("from-dst", author: "d", to: dst)
+
+        ChannelStore.relocateAndRemove(from: src, into: dst)
+
+        let texts = ChannelStore.entries(for: dst).map(\.text)
+        #expect(Set(texts) == Set(["from-src", "from-dst"]))
+        #expect(!FileManager.default.fileExists(atPath: ChannelStore.dir(for: src).path))
+    }
+
     /// outbox の追記・読み出しと配信カーソルが往復する。
     @Test func outboxAndDeliveryCursorRoundTrip() throws {
         let chID = UUID(); let toID = UUID()
