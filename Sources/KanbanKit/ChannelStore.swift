@@ -180,8 +180,16 @@ public struct CardBinding: Codable, Sendable {
 public enum ChannelStore {
     // MARK: - パス
 
+    /// `FLEET_ROOT` 環境変数が設定されていればそれを使う(主にテストの隔離用: 実マシンの
+    /// `~/.fleet` を汚さずに済む)。未設定なら従来どおり `~/.fleet`。
+    /// `ProcessInfo.environment` は辞書コピーを返すが軽量なので、毎回引くだけで十分安い
+    /// (キャッシュは行わない: テストプロセスが起動直後に一度だけ設定する前提のため、
+    /// キャッシュすると設定タイミングに敏感になり事故りやすい)。
     public static func fleetRoot() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = ProcessInfo.processInfo.environment["FLEET_ROOT"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".fleet", directoryHint: .isDirectory)
     }
     public static func baseDir() -> URL {

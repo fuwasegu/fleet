@@ -9,6 +9,10 @@ import SwiftData
 @MainActor
 struct WorktreeIntentApplyTests {
 
+    /// ChannelStore 経由でファイルを書くテストを含むため、実マシンの ~/.fleet を汚さないよう
+    /// 最初のテスト本体が動く前に隔離用 FLEET_ROOT を確実に設定しておく。
+    init() { TestFleetRoot.bootstrap() }
+
     private func makeStore() throws -> BoardStore {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, ClaudeProfile.self, configurations: config)
@@ -158,6 +162,37 @@ struct WorktreeIntentApplyTests {
         #expect(result.ok == false)
 
         // intent は適用済みとして記録され、再試行され続けない
+        let applied = ChannelStore.appliedWorktreeIntentIDs(for: ch.id)
+        #expect(applied.contains(intent.id))
+    }
+
+    /// SAFETY: カードの cwd が git リポジトリでない(素のディレクトリ)場合、worktree 作成は
+    /// 失敗結果として記録されるだけで、worktree はバインドされず、intent は(リトライされないよう)
+    /// 適用済みとして記録される。これまで未テストだった "not a git repository" 経路。
+    @Test func worktreeIntentFailsWhenNotAGitRepo() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let plainDir = NSTemporaryDirectory() + "wt-intent-nogit-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: plainDir, withIntermediateDirectories: true)
+        let a = try store.addCard(title: "a", to: todo, workingDirPath: plainDir)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer {
+            ChannelStore.removeBinding(cardID: a.id)
+            ChannelStore.removeBinding(cardID: b.id)
+            ChannelStore.removeDir(for: ch.id)
+            try? FileManager.default.removeItem(atPath: plainDir)
+        }
+
+        let intent = WorktreeIntent(fromCardID: a.id.uuidString, branch: "feat/nogit", base: "current")
+        ChannelStore.appendWorktreeIntent(intent, to: ch.id)
+        store.applyWorktreeIntents(for: ch.id)
+
+        let result = try #require(ChannelStore.worktreeResult(id: intent.id, for: ch.id))
+        #expect(result.ok == false)
+        #expect(a.isFleetOwnedWorktree == false)
+        #expect(a.worktreePath == nil)
+
         let applied = ChannelStore.appliedWorktreeIntentIDs(for: ch.id)
         #expect(applied.contains(intent.id))
     }

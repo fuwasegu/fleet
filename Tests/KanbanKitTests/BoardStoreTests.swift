@@ -6,6 +6,10 @@ import SwiftData
 @MainActor
 struct BoardStoreTests {
 
+    /// このスイートは ChannelStore 経由でファイルを書くテストを含む。実マシンの ~/.fleet を
+    /// 汚さないよう、最初のテスト本体が動く前に隔離用 FLEET_ROOT を確実に設定しておく。
+    init() { TestFleetRoot.bootstrap() }
+
     private func makeStore() throws -> BoardStore {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, ClaudeProfile.self, configurations: config)
@@ -217,6 +221,7 @@ struct BoardStoreTests {
         let a = try store.addCard(title: "a", to: col)
         let b = try store.addCard(title: "b", to: col)
         let ch = try store.connectCards(a, b)
+        defer { cleanup(cards: [a.id, b.id], channels: [ch?.id].compactMap { $0 }) }
         #expect(ch != nil)
         #expect(a.channel?.id == ch?.id)
         #expect(b.channel?.id == ch?.id)
@@ -231,6 +236,7 @@ struct BoardStoreTests {
         let c = try store.addCard(title: "c", to: col)
         let ch = try store.connectCards(a, b)
         _ = try store.connectCards(b, c)   // c を既存チャンネルへ
+        defer { cleanup(cards: [a.id, b.id, c.id], channels: [ch?.id].compactMap { $0 }) }
         #expect(c.channel?.id == ch?.id)
         #expect(ch?.cards.count == 3)
         #expect(try store.channels().count == 1)
@@ -247,6 +253,7 @@ struct BoardStoreTests {
         _ = try store.connectCards(c, d)   // ch2
         #expect(try store.channels().count == 2)
         _ = try store.connectCards(b, c)   // 合流
+        defer { cleanup(cards: [a.id, b.id, c.id, d.id], channels: [a.channel?.id].compactMap { $0 }) }
         #expect(try store.channels().count == 1)
         #expect(a.channel?.id == d.channel?.id)
         #expect(a.channel?.cards.count == 4)
@@ -257,7 +264,8 @@ struct BoardStoreTests {
         let col = try store.addColumn(name: "A")
         let a = try store.addCard(title: "a", to: col)
         let b = try store.addCard(title: "b", to: col)
-        _ = try store.connectCards(a, b)
+        let ch = try store.connectCards(a, b)
+        defer { cleanup(cards: [a.id, b.id], channels: [ch?.id].compactMap { $0 }) }
         try store.deleteCard(a)   // 残り1枚 → チャンネル解散
         #expect(b.channel == nil)
         #expect(try store.channels().isEmpty)
@@ -271,6 +279,7 @@ struct BoardStoreTests {
         let c = try store.addCard(title: "c", to: col)
         let ch = try store.connectCards(a, b)
         _ = try store.connectCards(b, c)
+        defer { cleanup(cards: [a.id, b.id, c.id], channels: [ch?.id].compactMap { $0 }) }
         try store.deleteCard(a)   // 2枚残る → チャンネル存続
         #expect(try store.channels().count == 1)
         #expect(b.channel?.id == ch?.id)
@@ -283,7 +292,8 @@ struct BoardStoreTests {
         let col = try store.addColumn(name: "A")
         let a = try store.addCard(title: "a", to: col)
         let b = try store.addCard(title: "b", to: col)
-        _ = try store.connectCards(a, b)
+        let ch = try store.connectCards(a, b)
+        defer { cleanup(cards: [a.id, b.id], channels: [ch?.id].compactMap { $0 }) }
         try store.disconnectCard(a)   // 残り1枚 → 解散
         #expect(a.channel == nil)
         #expect(b.channel == nil)
@@ -489,6 +499,51 @@ struct BoardStoreTests {
         writeIntent(BoardIntent(kind: "move_card", fromID: a.id.uuidString, card: "b", column: "Done"), to: ch.id)
         store.applyBoardIntents(for: ch.id)
         #expect(b.column?.name == "Done")
+    }
+
+    /// move_card intent は「適用済み id」集合で二重適用が防がれる(SAFETY: 未テストだった経路)。
+    /// 検証方法: 1回目の適用後、盤面側の操作(intent 経由でない直接 moveCard)で別列へ移す。
+    /// もし intents ファイルが変わっていないのに2回目の適用が再実行されてしまうなら、
+    /// カードは意図せず "Done" へ引き戻される。再実行されなければ "Other" に留まるはず。
+    @Test func applyMoveCardIntentIsIdempotent() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let done = try store.addColumn(name: "Done")
+        let other = try store.addColumn(name: "Other")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        let intent = BoardIntent(kind: "move_card", fromID: a.id.uuidString, card: "b", column: "Done")
+        writeIntent(intent, to: ch.id)
+        store.applyBoardIntents(for: ch.id)
+        #expect(b.column?.name == "Done")
+        #expect(ChannelStore.appliedIntentIDs(for: ch.id).contains(intent.id))
+
+        try store.moveCard(b, to: other, at: 0)
+        store.applyBoardIntents(for: ch.id)   // 同じ intents ファイルへの2回目の適用
+        #expect(b.column?.name == "Other")    // 再適用されていれば "Done" へ戻ってしまうはず
+        #expect(done.cards.isEmpty)
+    }
+
+    /// 未知の kind の board intent は無視されるが、適用済みとして記録され続けリトライされない
+    /// (SAFETY: 未テストだった default 分岐 / 無限リトライ防止の確認)。
+    @Test func applyBoardIntentsIgnoresUnknownKind() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        let intent = BoardIntent(kind: "delete_everything", fromID: a.id.uuidString)
+        writeIntent(intent, to: ch.id)
+        store.applyBoardIntents(for: ch.id)
+
+        #expect(try store.columns().count == 1)   // 何も破壊されていない
+        #expect(ch.cards.count == 2)
+        #expect(ChannelStore.appliedIntentIDs(for: ch.id).contains(intent.id))   // 適用済みとして記録
     }
 
     /// board.json スナップショットが列とチャンネルカードを反映する。

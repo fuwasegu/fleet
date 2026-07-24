@@ -11,6 +11,10 @@ import SwiftData
 @MainActor
 struct WorktreeIntentApplyAsyncTests {
 
+    /// ChannelStore 経由でファイルを書くテストを含むため、実マシンの ~/.fleet を汚さないよう
+    /// 最初のテスト本体が動く前に隔離用 FLEET_ROOT を確実に設定しておく。
+    init() { TestFleetRoot.bootstrap() }
+
     private func makeStore() throws -> BoardStore {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: BoardColumn.self, Card.self, Channel.self, ClaudeProfile.self, configurations: config)
