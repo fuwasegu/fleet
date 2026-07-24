@@ -112,6 +112,23 @@ public struct BoardStore {
         try context.save()
     }
 
+    /// カードを Fleet 管理 worktree にバインドする(git 操作は行わない。バインディングのみ)。
+    public func setWorktree(_ card: Card, repoRoot: String, worktreePath: String, branch: String, fleetOwned: Bool) throws {
+        card.repoRoot = repoRoot
+        card.worktreePath = worktreePath
+        card.branch = branch
+        card.isFleetOwnedWorktree = fleetOwned
+        try context.save()
+    }
+
+    /// worktree バインディングのみ解除する(ディスク上の worktree には触れない)。
+    public func clearWorktree(_ card: Card) throws {
+        card.worktreePath = nil
+        card.repoRoot = nil
+        card.isFleetOwnedWorktree = false
+        try context.save()
+    }
+
     /// アプリ起動時に呼ぶ。端末セッションはプロセスと共に消えるため、全カードを
     /// 「CC 未起動」状態(unknown / 既読 / 問いなし)にリセットして、表示と実体の齟齬を防ぐ。
     public func resetAgentStates() throws {
