@@ -21,6 +21,7 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     private var latestTitle: String = ""              // 直近の OSC タイトル(Working/Idle の主信号)
     weak var term: LocalProcessTerminalView?   // Blocked判定のバッファ走査用
     var onStateChange: ((UUID) -> Void)?       // 状態が変わったら通知(A2A: peers 更新 / キュー配信)
+    var onProcessTerminated: ((UUID) -> Void)? // シェル終了を TerminalSessions へ中継(hasSession を false にするため)
 
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
         self.cardID = cardID
@@ -109,6 +110,13 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
 
     func processTerminated(source: SwiftTerm.TerminalView, exitCode: Int32?) {
         apply(.idle)
+        // シェルが自然終了(exit/Ctrl-D 等)した場合、カード削除以外の経路では誰も
+        // TerminalSessions.close を呼ばない。呼ばずに放置すると views[cardID] が残り続け、
+        // hasSession が永遠に true のまま(= worktree 削除フローが .inUse を降り続ける)。
+        // ここでは view/monitor 自体は破棄しない(ターミナルの overlay が表示中に SwiftTerm の
+        // ビューを引き抜くのは危険なため、スクロールバック等の表示は保持する)。
+        // 「死んでいる」ことだけを TerminalSessions に伝え、hasSession を false にしてもらう。
+        onProcessTerminated?(cardID)
     }
 
     private func apply(_ state: AgentState, question: String? = nil) {
@@ -201,6 +209,10 @@ final class MonitoredTerminalView: LocalProcessTerminalView {
 final class TerminalSessions {
     private var views: [UUID: LocalProcessTerminalView] = [:]
     private var monitors: [UUID: AgentStateMonitor] = [:]   // processDelegate は weak なので保持する
+    // シェルが自然終了した(processTerminated)が、まだ overlay 表示中で views から取り除いて
+    // いないカード。hasSession はこれを見て false を返す ＝「使用中」判定だけを解除する。
+    // view(for:) が新規セッションを張るときに取り除く(古いカード id を再利用したケース対策)。
+    private var deadSessions: Set<UUID> = []
     var onCardStateChange: ((UUID) -> Void)?               // A2A: Agent 状態変化を Hub へ中継
 
     func view(for cardID: UUID,
@@ -211,6 +223,7 @@ final class TerminalSessions {
               context: ModelContext,
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
+        deadSessions.remove(cardID)   // 新規セッションを張るので「死亡」マークを解除
         let term = MonitoredTerminalView(frame: .zero)
         term.font = TerminalSettings.resolvedFont()   // 設定フォントを適用
         Self.applyTheme(TerminalSettings.resolvedTheme(), to: term)
@@ -224,6 +237,7 @@ final class TerminalSessions {
         monitor.term = term
         term.onScan = { [weak monitor] in monitor?.rescan() }
         monitor.onStateChange = { [weak self] id in self?.onCardStateChange?(id) }
+        monitor.onProcessTerminated = { [weak self] id in self?.markSessionDead(id) }
         monitors[cardID] = monitor
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
@@ -473,8 +487,13 @@ final class TerminalSessions {
         term.caretColor = NSColor(hex: theme.caret)
     }
 
-    /// このカードのターミナルセッションが既に生きているか。
-    func hasSession(_ cardID: UUID) -> Bool { views[cardID] != nil }
+    /// このカードのターミナルセッションが既に生きているか。シェルが自然終了した(死亡マーク
+    /// 済み)ものは、view 自体はまだ overlay 表示用に残っていても「使用中」とはみなさない。
+    func hasSession(_ cardID: UUID) -> Bool { views[cardID] != nil && !deadSessions.contains(cardID) }
+
+    /// `AgentStateMonitor.processTerminated` から呼ばれる。SwiftTerm の view/monitor は
+    /// (overlay が表示中の可能性があるため)破棄せず、hasSession の判定だけを反転させる。
+    private func markSessionDead(_ cardID: UUID) { deadSessions.insert(cardID) }
 
     /// A2A: 生きているセッションへ1行を「入力」として送り込む(末尾に改行=送信)。
     /// 宛先が idle(プロンプト待ち)のときだけ Hub から呼ぶこと。
@@ -500,6 +519,7 @@ final class TerminalSessions {
         }
         views[cardID] = nil
         monitors[cardID] = nil
+        deadSessions.remove(cardID)
     }
 
     // MARK: - cwd の追従 (OSC7 は既定で来ないので、閉じる時にシェルの cwd をネイティブ取得)
