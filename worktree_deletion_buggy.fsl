@@ -1,0 +1,109 @@
+// Fleet: カード削除時の worktree 安全削除ロジック(v0.6.0-v0.7.2 のバグを再現)。
+// 実装:
+//   - カードは worktree を bind できる(bound)。risk 分類は優先順位付き:
+//     inUse(生きた terminal/agent セッションがある) > dirty(未コミット変更) >
+//     unpushed(未push/未merge) > clean。
+//   - 削除は risk==clean のときのみ許可。`git worktree remove --force` は使わない。
+// ASSUME-1(表現のみ): カードは1枚。worktree の有無/bound、session 生存、
+//   汚れ具合(dirty/unpushed のフラグ)を状態に持つ。
+// ASSUME-2(進行性プロパティのためのスコープ限定): delete_requested(削除要求が出た
+//   ことを示す sticky フラグ)が立っている間は make_dirty/make_unpushed を無効化する。
+//   理由: 「クリーンな状態から削除要求が出たら、いずれ削除される」という進行性は、
+//   ユーザー/エージェントが要求後も無限に新しい変更を続ける限り原理的に満たせない
+//   (新しい dirty は常に安全性のために削除をブロックしてよい、それはバグではない)。
+//   このスコープ限定がないと fslc verify --depth 8 は実際に「delete 要求直後に
+//   make_dirty→end_session_and_remove→commit_and_push→start_session…」という
+//   無限ループの反例を返した(fixed 版でも同様に失敗した)。バグそのものとは無関係な
+//   環境干渉による失敗だったため、削除要求後の新規汚染を止めるという設計判断を
+//   ASSUME として明示し、両スペックに同一に適用する。
+// THE DEFECT(v0.6.0-v0.7.2): .inUse ダイアログは非破壊的な選択肢しか出さない
+//   (「カードだけ削除してworktreeは残す」/「terminalを開く」/「キャンセル」)。
+//   かつ、アプリのどこにも「session_live を落とすアクション」が存在しなかった
+//   (shell終了はagent状態をidleにするだけで、session登録は解除されない)。
+//   → このスペックはその欠陥を「session_live を false にするアクションを
+//     意図的に用意しない」ことで表現する(=モデル上の脱漏そのものが欠陥の写像)。
+//   一度 session_live になったカードは、恒久的に worktree を削除できない。
+spec WorktreeDeletionBuggy "design: v0.6.0-v0.7.2 .inUse dialog has no session-ending path" {
+  state {
+    bound:            Bool,   // カードが worktree を bind しているか
+    session_live:     Bool,   // 生きた terminal/agent セッションがあるか
+    dirty:            Bool,   // 未コミット変更があるか
+    unpushed:         Bool,   // 未push/未mergeのコミットがあるか
+    removed:          Bool,   // worktree が削除されたか(禁止/許可を観測するためのマーカー)
+    ever_session_live: Bool,  // ghost: session_live が true になったことが過去にあるか(履歴)
+    delete_requested: Bool    // ユーザーが削除を要求したか(sticky。ASSUME-2 参照)
+  }
+  init {
+    bound             = true
+    session_live      = false
+    dirty             = false
+    unpushed          = false
+    removed           = false
+    ever_session_live = false
+    delete_requested  = false
+  }
+
+  // worktree を汚す/綴じる操作(モデル上の環境変化)。ASSUME-2: 削除要求後は無効。
+  action make_dirty()     { requires bound and not dirty and not delete_requested      dirty = true }
+  action make_unpushed()  { requires bound and not unpushed and not delete_requested   unpushed = true }
+  action commit_and_push() { requires bound and (dirty or unpushed)  dirty = false  unpushed = false }
+
+  // ユーザーが削除を要求する(sticky: 一度立てたら削除完了まで戻らない)。
+  action request_delete() {
+    requires bound and not delete_requested
+    delete_requested = true
+  }
+
+  // セッションを開始する(terminal/agent を起動)。
+  action start_session() {
+    requires bound
+    requires not session_live
+    session_live      = true
+    ever_session_live = true
+  }
+  // NOTE(THE DEFECT): ここに session_live を false にするアクションが無い。
+  // 実装では shell 終了時に agent 状態を idle にするだけで、session の登録
+  // (herdr的な "session exists" フラグ)は解除されなかった。一度 true になった
+  // session_live を false に戻す手段がこのスペックには存在しない。
+
+  // ユーザーがカード削除を要求し、risk == Clean(not session_live, not dirty, not unpushed)
+  // のときにだけ worktree を実際に削除する。ガードを requires に置く(if に埋めない)ことで、
+  // 「常に enabled だが有効な分岐を取らないだけ」という空虚な fairness 充足を避ける。
+  // risk != Clean の間はこのアクション自体が無効(=非破壊的な選択肢しかない状態)。
+  fair action remove_when_clean() {
+    requires bound and delete_requested and (not session_live) and (not dirty) and (not unpushed)
+    // 安全に削除できる。`git worktree remove --force` は使わない。
+    bound   = false
+    removed = true
+  }
+
+  // ---- 安全性(本命の保証): dirty・unpushed・session生存中は worktree を絶対に消さない ----
+  invariant NeverRemoveWhileDirtyOrUnpushed {
+    removed => (not dirty and not unpushed)
+  }
+  invariant NeverRemoveWhileInUse {
+    removed => not session_live
+  }
+  // 補助不変条件(induction の CTI 対策): 削除されたら bound は必ず false
+  // (bound=true かつ removed=true という幻影状態を帰納法から排除する、ドメイン上の真)。
+  invariant RemovedImpliesUnbound { removed => not bound }
+
+  // 正常系 witness: そもそも clean なら削除できる(過剰制約でない証拠)。
+  reachable CanRemoveWhenClean { removed }
+
+  // ---- 到達性/進行性(バグが破っていた性質) ----
+  // 過去に session が生きていたカードでも、clean になれば最終的に worktree を
+  // 削除できるはず。ever_session_live は履歴ghost(一度trueになったら不変)なので、
+  // 「session_live=true を経由した後、いずれ removed=true に到達できるか」を表す。
+  // バグ版は session_live を false に戻す手段が無いため、これは到達不能のはず(FAIL想定)。
+  reachable RemovedAfterSessionWasLive { ever_session_live and removed }
+
+  // leadsTo: session が生きていて clean なカードで削除要求が出たら、いずれ削除が
+  // 完了するはず(進行性)。バグ版は session_live を落とす手段が無いため、
+  // ここで stall するはず(FAIL想定)。
+  leadsTo DeletionEventuallyHappensForClean {
+    (bound and delete_requested and session_live and not dirty and not unpushed) ~> removed
+  }
+
+  terminal { removed }
+}

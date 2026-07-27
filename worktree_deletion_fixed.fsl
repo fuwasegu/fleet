@@ -1,0 +1,110 @@
+// Fleet: カード削除時の worktree 安全削除ロジック(v0.7.3 の修正版)。
+// 実装:
+//   - カードは worktree を bind できる(bound)。risk 分類は優先順位付き:
+//     inUse(生きた terminal/agent セッションがある) > dirty(未コミット変更) >
+//     unpushed(未push/未merge) > clean。
+//   - 削除は risk==clean のときのみ許可。`git worktree remove --force` は使わない。
+// ASSUME-1(表現のみ): カードは1枚。worktree の有無/bound、session 生存、
+//   汚れ具合(dirty/unpushed のフラグ)を状態に持つ。worktree_deletion_buggy.fsl と
+//   同一のモデル・同一の安全性/進行性プロパティを共有する。
+// THE FIX(v0.7.3): .inUse ダイアログに「セッションを終了して worktree を削除する」が
+//   追加された(end_session_and_remove)。これは session_live を false に落とし
+//   (= fix(1): shell終了はもはや生きたセッションとみなされない、をこの1アクションに
+//   束ねて表現)、risk を再評価し、再評価結果が clean のときだけ削除する
+//   (dirty/unpushed ならまだブロックする)。
+// MODELING NOTE: 最初のドラフトでは shell_terminates と end_session_and_remove を
+//   別々の fair action にしていたが、両方が「session_live のときだけ enabled」という
+//   同じガードを持つため、fslc verify --depth 8 で「shell_terminates ばかり選ばれ
+//   end_session_and_remove の弱公平性の前提(継続的enabled)が途切れる」leadsTo の
+//   反例が実際に出た(request_delete_card 側は requires が bound だけで if 分岐の
+//   有無に関わらず「発火した」ことになり、fairness を空虚に満たしてしまうのも一因)。
+//   これは意図した欠陥ではなくガード配置(if 内 vs requires)の設計ミスだったため、
+//   ガードを requires に上げて1本の end_session_and_remove に統合し修正した。
+// ASSUME-2(worktree_deletion_buggy.fsl と同一。進行性プロパティのためのスコープ限定):
+//   delete_requested が立っている間は make_dirty/make_unpushed を無効化する。理由は
+//   buggy 版のコメント参照 — この統合をせずに再テストしたところ、統合後もなお
+//   「delete 要求後に make_dirty→end_session_and_remove(dirtyなので削除されず)→
+//   commit_and_push→start_session…」という無限ループの反例が出た(修正版でも
+//   環境が要求後も無限に汚し続ければ進行性は原理的に成立しない)。バグとは無関係な
+//   干渉なので、両スペックに同一の ASSUME-2 を適用してスコープを揃えた。
+spec WorktreeDeletionFixed "design: v0.7.3 .inUse dialog gains end-session-and-remove path" {
+  state {
+    bound:             Bool,
+    session_live:      Bool,
+    dirty:             Bool,
+    unpushed:          Bool,
+    removed:           Bool,
+    ever_session_live: Bool,  // ghost: session_live が true になったことが過去にあるか(履歴)
+    delete_requested:  Bool   // ユーザーが削除を要求したか(sticky。ASSUME-2 参照)
+  }
+  init {
+    bound             = true
+    session_live      = false
+    dirty             = false
+    unpushed          = false
+    removed           = false
+    ever_session_live = false
+    delete_requested  = false
+  }
+
+  action make_dirty()     { requires bound and not dirty and not delete_requested      dirty = true }
+  action make_unpushed()  { requires bound and not unpushed and not delete_requested   unpushed = true }
+  action commit_and_push() { requires bound and (dirty or unpushed)  dirty = false  unpushed = false }
+
+  // ユーザーが削除を要求する(sticky: 一度立てたら削除完了まで戻らない)。
+  action request_delete() {
+    requires bound and not delete_requested
+    delete_requested = true
+  }
+
+  action start_session() {
+    requires bound
+    requires not session_live
+    session_live      = true
+    ever_session_live = true
+  }
+
+  // 通常の削除(session が無い場合): risk == Clean のときにだけ worktree を削除する。
+  // ガードを requires に置く(if に埋めない) — buggy 版と同じ理由。
+  fair action remove_when_clean() {
+    requires bound and delete_requested and (not session_live) and (not dirty) and (not unpushed)
+    bound   = false
+    removed = true
+  }
+
+  // THE FIX: .inUse ダイアログの新しい選択肢「セッションを終了して worktree を削除する」。
+  // セッションを閉じ、risk を再評価し、再評価結果が clean のときだけ削除する
+  // (dirty/unpushed ならまだブロックする)。session_live を false に落とす手段は
+  // これ1つだけ(= buggy 版には存在しなかったアクション)。
+  fair action end_session_and_remove() {
+    requires bound and delete_requested and session_live
+    session_live = false
+    if (not dirty) and (not unpushed) {
+      bound   = false
+      removed = true
+    }
+    // else: 再評価後も dirty/unpushed が残るなら、セッションは閉じるが worktree は残す。
+  }
+
+  // ---- 安全性(バグ版と同一。両方で SATISFIED であることを示すのが目的) ----
+  invariant NeverRemoveWhileDirtyOrUnpushed {
+    removed => (not dirty and not unpushed)
+  }
+  invariant NeverRemoveWhileInUse {
+    removed => not session_live
+  }
+  // 補助不変条件(induction の CTI 対策): 削除されたら bound は必ず false
+  // (bound=true かつ removed=true という幻影状態を帰納法から排除する、ドメイン上の真)。
+  invariant RemovedImpliesUnbound { removed => not bound }
+
+  reachable CanRemoveWhenClean { removed }
+
+  // ---- 到達性/進行性(修正で回復したはずの性質: PASS 想定) ----
+  reachable RemovedAfterSessionWasLive { ever_session_live and removed }
+
+  leadsTo DeletionEventuallyHappensForClean {
+    (bound and delete_requested and session_live and not dirty and not unpushed) ~> removed
+  }
+
+  terminal { removed }
+}
