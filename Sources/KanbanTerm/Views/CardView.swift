@@ -558,6 +558,9 @@ struct CardView: View {
                 ),
                 titleVisibility: .visible
             ) {
+                if case .inUse = warningWorktreeRisk {
+                    Button("セッションを終了して worktree も削除", role: .destructive, action: endSessionAndRemoveWorktree)
+                }
                 Button("カードだけ削除(worktree はディスクに残す)", role: .destructive, action: clearWorktreeThenDeleteCard)
                 Button("ターミナルを開いて手動で処理") {
                     warningWorktreeRisk = nil
@@ -717,7 +720,7 @@ struct CardView: View {
         case .unpushed:
             return "この worktree には未プッシュ/未マージのコミットがあります。履歴を失わないよう、Fleet はこの worktree を削除しません。"
         case .inUse:
-            return "この worktree は現在ターミナル/Agent セッションで使用中です。使用中の worktree は削除しません。"
+            return "この worktree は現在ターミナル/Agent セッションで使用中です。削除するには、まずセッションを終了する必要があります。「セッションを終了して worktree も削除」を選ぶと、セッションを終了したうえで削除可能か再確認します(未コミット/未プッシュの変更があれば、その場合も削除しません)。"
         case .clean, nil:
             return ""
         }
@@ -760,6 +763,62 @@ struct CardView: View {
                 }
             case .failure(let e):
                 worktreeDeleteError = e.message
+            }
+        }
+    }
+
+    /// risk == .inUse の警告ダイアログの第一選択肢。「使用中だから削除しない」を唯一の
+    /// 逃げ場にせず、セッションを終了したうえで安全性を再確認して削除まで進める。
+    /// 通常のカード削除確認(「起動中のターミナル/Agent も終了します」)がセッションを
+    /// 終了する前提なのに、worktree 削除だけがそれを拒む非対称を解消する。
+    /// 終了は「使用中」判定を外すだけで、未コミット/未プッシュの危険は別途 `removalRisk`
+    /// の再チェックで判定するため、安全側の不変条件(clean 以外は消さない)は変わらない。
+    private func endSessionAndRemoveWorktree() {
+        warningWorktreeRisk = nil
+        guard let worktreePath = card.worktreePath, let repoRoot = card.repoRoot else {
+            deleteCard()
+            return
+        }
+        guard !worktreeBusy else { return }
+        sessions.close(card.id)   // シェル + プロセスグループを終了(通常削除と同じ)
+        worktreeBusy = true
+        let inUse = sessions.hasSession(card.id)   // close 直後なので基本 false だが、既存フローと同形に再チェックへ渡す
+        let cardID = card.id
+        Task {
+            let risk = await Task.detached(priority: .userInitiated) {
+                WorktreeService.removalRisk(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+            }.value
+            guard BoardStore(context: context).card(withID: cardID) != nil else { worktreeBusy = false; return }
+            switch risk {
+            case .clean:
+                let outcome: Result<Void, WorktreeService.GitError> = await Task.detached(priority: .userInitiated) {
+                    do {
+                        try WorktreeService.removeSafely(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+                        return .success(())
+                    } catch let e as WorktreeService.GitError {
+                        return .failure(e)
+                    } catch {
+                        return .failure(WorktreeService.GitError(message: "\(error)"))
+                    }
+                }.value
+                worktreeBusy = false
+                guard BoardStore(context: context).card(withID: cardID) != nil else { return }
+                switch outcome {
+                case .success:
+                    do {
+                        try BoardStore(context: context).clearWorktree(card)
+                        deleteCard()
+                    } catch {
+                        worktreeDeleteError = "\(error)"
+                    }
+                case .failure(let e):
+                    worktreeDeleteError = e.message
+                }
+            case .dirty, .unpushed, .inUse:
+                // セッションを終了しても未コミット/未プッシュの危険は消えない。安全側に
+                // 倒して worktree は削除せず、対応するダイアログを再表示する(カードも削除しない)。
+                worktreeBusy = false
+                warningWorktreeRisk = risk
             }
         }
     }
