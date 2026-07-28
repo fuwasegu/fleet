@@ -29,3 +29,7 @@
 
 ## v0.8.0
 - worktree のベースを origin から最新化して作成(古いベースからの派生を防止)。fetch 失敗/リモート無しは警告を出してフォールバック
+
+## v0.8.1
+- worktree のベース最新化で認証ヘルパーを無効化しないよう修正(HTTPS リモートで必ず fetch 失敗していた)
+- fetch に 20 秒タイムアウト、ssh は BatchMode で fail-fast

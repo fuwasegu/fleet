@@ -252,4 +252,36 @@ import Foundation
         #expect(resolved.note != nil)
         #expect(elapsed < 10)   // ハングしていないことの目安(通常は数百ms未満で失敗するはず)
     }
+
+    /// タイムアウト機構そのものの検証。git の `ext::` transport(リモート URL の代わりに
+    /// ローカルコマンドを"トランスポート"として実行する標準機能)を使い、ネットワークを
+    /// 一切使わずに fetch を確実にハングさせる(`ext::sleep 30`)。`run(..., timeout:)` が
+    /// その壁時計超過を検知して `GitError`(タイムアウトメッセージ)で抜けること、かつ
+    /// ハングしたプロセスグループ(git → git-remote-ext → sleep)を実際に kill して即座に
+    /// 戻ってくることを確認する。
+    ///
+    /// 実運用の `fetchBase` は timeout=20 固定なのでテストを遅くしないよう、ここでは
+    /// internal な `run(_:in:extraEnv:timeout:)` へ直接小さい timeout を渡す
+    /// (`fetchBase` 自体はこの `run` を呼ぶだけなので機構としては同一)。
+    @Test func fetchTimesOutRatherThanHanging() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+
+        let start = Date()
+        do {
+            _ = try WorktreeService.run(
+                ["-c", "protocol.ext.allow=always", "fetch", "--no-tags", "ext::sleep 30", "main"],
+                in: repo,
+                extraEnv: [:],
+                timeout: 1
+            )
+            Issue.record("タイムアウトで GitError が throw されるはずだった")
+        } catch let e as WorktreeService.GitError {
+            #expect(e.message.contains("タイムアウト"))
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        // 1秒タイムアウト + kill 後始末(SIGTERM 猶予込み)なので数秒以内に必ず抜ける。
+        // sleep 30 まで待たされていないことがこの assert のポイント。
+        #expect(elapsed < 6)
+    }
 }
