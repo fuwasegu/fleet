@@ -129,16 +129,36 @@ public enum AgentNotification {
 
 配信層（`UNUserNotificationCenter`）はユニットテストの対象外。実機で手動確認する。
 
-## リスク
+## リスクと検証状況（実装後に追記）
 
-`project.yml` は `CODE_SIGNING_ALLOWED: NO` のため、ローカルの開発ビルドは未署名。
-`UNUserNotificationCenter` は未署名バンドルで動作しないことがある。リリース版は
-`scripts/sign-app.sh` による自己署名済み（配布中の `/Applications/Fleet.app` で確認）
-なので配布物は問題ない見込み。
+**通知が実際に配信されるところは未検証のまま v0.9.0 をリリースし、本番で確認する**
+という判断を取った。以下は判断の材料。
 
-実装の最初に疎通確認を行い、未署名で動かない場合のみ Debug 構成に ad-hoc 署名
-（`CODE_SIGN_IDENTITY = "-"`）を足す。`debugEnabled: false`（Developer Tools Access
-認証の回避）には影響しない。
+`project.yml` は `CODE_SIGNING_ALLOWED: NO` のため、ローカルの開発ビルドは
+ad-hoc 署名（arm64 ではリンカが自動付与するため「未署名」は存在しない）。
+これで `UNUserNotificationCenter` が使えるかを、使い捨ての最小 .app バンドルで実測した。
+
+| 条件 | `requestAuthorization` | `add` |
+|---|---|---|
+| ad-hoc 署名 | `granted=false` / `UNErrorDomain` Code 1 | 失敗 Code 1 |
+| 実証明書で署名（未使用 bundle id・Info.plist 完備） | `granted=false` / Code 1 | 成功 (`err=nil`) |
+
+署名の質で `add` の成否は変わったが、**どちらも許可が下りず、許可ダイアログも
+観測できなかった**。スパイクがウィンドウを一つも持たない裸のアプリだったことが
+原因の可能性が高い（許可ダイアログの提示にフォアグラウンドのウィンドウを要する）が、
+**これは仮説であり未検証**。Fleet 本体は実ウィンドウと Xcode 生成の完全な Info.plist を
+持つため条件が異なる。
+
+なお会社管理 Mac の MDM に `com.apple.notificationsettings` プロファイルがあるが、
+中身は業務アプリ28個を強制許可するホワイトリストで他アプリを禁止するものではなく、
+Slack / Chrome / Ghostty 等は通常どおり通知登録されている。これは原因ではない。
+
+配布物は `scripts/sign-app.sh` で自己署名される（`/Applications/Fleet.app` は
+`TeamIdentifier=not set` の実証明書で署名済み）ので、上表の下段の条件になる。
+
+**確認すべきこと（リリース後）**: 通知が配信されるか / 初回起動で許可ダイアログが
+出るか / クリックで該当カードのターミナルが開くか。出なければ、ローカルの開発ビルドは
+ad-hoc のままでは検証できないので、実証明書で署名して再現を取る。
 
 ## やらないこと（YAGNI）
 
