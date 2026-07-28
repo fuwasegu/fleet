@@ -92,3 +92,9 @@
 "文脈共有を開始しました" = "Shared context started";
 "すでに起動中の Agent には、次回の claude 起動から共有メモリツール (fleet_recall / fleet_remember / fleet_peers / fleet_message) が有効になります。" = "Agents that are already running will get the shared-memory tools (fleet_recall / fleet_remember / fleet_peers / fleet_message) the next time claude starts.";
 "届いた A2A メッセージがあります(次に手が空いたら反映されます)" = "An A2A message is waiting (it will be delivered when this agent is next idle).";
+"完了" = "Done";
+"通知" = "Notifications";
+"完了 (DONE) を通知" = "Notify when done";
+"承認待ち (BLOCKED) を通知" = "Notify when waiting for approval";
+"そのカードのターミナルを開いていないときだけ、カード名付きでシステム通知を出します。" = "Sends a system notification with the card name — only while you are not looking at that card’s terminal.";
+"システム設定で Fleet の通知を許可" = "Allow Fleet notifications in System Settings";
