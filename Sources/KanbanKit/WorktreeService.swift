@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum WorktreeBase: Hashable, Sendable { case current, defaultBranch }
 
@@ -61,9 +62,24 @@ extension WorktreeService {
 
     /// `run(_:in:)` の環境変数拡張版。`extraEnv` が空なら `Process.environment` を触らず
     /// (nil のまま = 親プロセスの環境をそのまま継承)、既存呼び出し元の挙動を完全に維持する。
-    /// `fetchBase` が `GIT_TERMINAL_PROMPT=0` を注入するために使う。
+    /// `fetchBase` が `GIT_TERMINAL_PROMPT=0` 等を注入するために使う。タイムアウト無し
+    /// (`run(_:in:extraEnv:timeout:)` に `timeout: nil` を渡すのと同じ)。
     @discardableResult
     static func run(_ args: [String], in dir: String, extraEnv: [String: String]) throws -> String {
+        try run(args, in: dir, extraEnv: extraEnv, timeout: nil)
+    }
+
+    /// `run(_:in:extraEnv:)` のタイムアウト付き版。`timeout` が nil ならタイムアウト監視を
+    /// 一切行わず(既存呼び出し元と完全に同じ挙動)、非nil なら壁時計で `timeout` 秒待って
+    /// 終わらなければ子プロセスのプロセスグループへ SIGTERM → (2秒待って) SIGKILL を送り、
+    /// `GitError` (タイムアウトメッセージ) を throw する。
+    ///
+    /// プロセスグループへ kill できる前提: `zsh -lc "<単一コマンド>"` は job control により
+    /// 実行前に新しい pgrp (pgid == 自分の pid) を作ってから対象コマンドへ exec するため、
+    /// `p.processIdentifier` は git 自身の pid かつそのままプロセスグループの pgid として使える
+    /// (`TerminalSessions.close` の `killpg(pid, SIGTERM)` と同じ前提)。
+    @discardableResult
+    static func run(_ args: [String], in dir: String, extraEnv: [String: String], timeout: TimeInterval?) throws -> String {
         let argv = ["git", "-C", dir] + args
         let command = argv.map(shellQuote).joined(separator: " ")
         let p = Process()
@@ -78,7 +94,6 @@ extension WorktreeService {
         let err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        try p.run()
 
         // stdout/stderr を並行して読み切ってから waitUntilExit する。
         // 大量出力(例: status --porcelain が数千件の untracked を返す)でパイプの
@@ -86,19 +101,45 @@ extension WorktreeService {
         // write でブロックし続けてデッドロックする。読み取りを先に(同時に)進めることで防ぐ。
         var outData = Data()
         var errData = Data()
-        let group = DispatchGroup()
-        group.enter()
+        let readGroup = DispatchGroup()
+        readGroup.enter()
         DispatchQueue.global().async {
             outData = out.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+            readGroup.leave()
         }
-        group.enter()
+        readGroup.enter()
         DispatchQueue.global().async {
             errData = err.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+            readGroup.leave()
         }
-        group.wait()
+
+        var timedOut = false
+        if let timeout {
+            // waitUntilExit 自体には期限を付けられないので、terminationHandler の発火を
+            // シグナルとして DispatchGroup で期限付き待機する。
+            let exitGroup = DispatchGroup()
+            exitGroup.enter()
+            p.terminationHandler = { _ in exitGroup.leave() }
+            try p.run()
+            if exitGroup.wait(timeout: .now() + timeout) == .timedOut {
+                timedOut = true
+                let pid = p.processIdentifier
+                if pid > 0 {
+                    killpg(pid, SIGTERM)
+                    _ = exitGroup.wait(timeout: .now() + 2)
+                    killpg(pid, SIGKILL)
+                }
+            }
+        } else {
+            try p.run()
+        }
+
+        readGroup.wait()
         p.waitUntilExit()
+
+        if timedOut {
+            throw GitError(message: "タイムアウト (\(Int(timeout ?? 0))秒)")
+        }
 
         let o = String(data: outData, encoding: .utf8) ?? ""
         if p.terminationStatus != 0 {
@@ -172,17 +213,32 @@ extension WorktreeService {
 
     /// `<remote>/<branch>` の追跡ブランチを最新化する(タグは取得しない)。
     ///
-    /// CRITICAL: 認証が必要なリモート(private repo で資格情報キャッシュが無い等)に対して
-    /// うっかり `git fetch` を叩くと、対話プロンプトを出そうとしてハングし、Fleet の UI/Agent
-    /// 処理をブロックしてしまう。ここでは子プロセスがプロンプトを一切出せないようにする:
-    /// `GIT_TERMINAL_PROMPT=0` で git 自身の端末プロンプトを止め、`core.askPass=` /
-    /// `credential.helper=` を空にして GUI askpass やキャッシュ済み credential helper への
-    /// フォールバックも塞ぐ。これで認証不可能な状況では即座に失敗する(ハングしない)。
+    /// CRITICAL: ブロックしたいのは「対話プロンプトによるハング」であって「認証そのもの」では
+    /// ない。以前は `-c credential.helper=` で credential helper 自体を無効化していたが、これは
+    /// 過剰だった — macOS の osxkeychain や `gh auth setup-git` が設定するヘルパーは、資格情報が
+    /// 既にキャッシュされていれば非対話(=ハングしない)で返すだけなので、これを塞ぐと
+    /// 認証済みユーザーの HTTPS fetch まで常に `could not read Username` で失敗してしまう
+    /// (実際に発生したバグ)。
+    ///
+    /// 対話プロンプトだけを狙って止める:
+    /// - `GIT_TERMINAL_PROMPT=0` で git 自身の端末プロンプト(HTTPS のユーザ名/パスワード入力等)を止める。
+    /// - `GIT_SSH_COMMAND=ssh -oBatchMode=yes` で SSH のパスフレーズ/known_hosts 対話を止める。
+    /// - `core.askPass=` は付けない(簡素化。上記2つで非対話化は十分カバーでき、GUI askpass に
+    ///   フォールバックする余地もそもそも無い環境が前提)。
+    ///
+    /// これでも「プロンプトを出さずに応答が返らないだけ」のリモート(ネットワーク断・
+    /// firewall drop 等)はハングしうるため、実効的な anti-hang 保証は `run` に渡す壁時計
+    /// タイムアウト(20秒)で行う。タイムアウト時は子プロセスのプロセスグループへ
+    /// SIGTERM → SIGKILL を送って確実に終了させる。
     public static func fetchBase(repoRoot: String, remote: String, branch: String) throws {
         try run(
-            ["-c", "core.askPass=", "-c", "credential.helper=", "fetch", "--no-tags", remote, branch],
+            ["fetch", "--no-tags", remote, branch],
             in: repoRoot,
-            extraEnv: ["GIT_TERMINAL_PROMPT": "0"]
+            extraEnv: [
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_SSH_COMMAND": "ssh -oBatchMode=yes",
+            ],
+            timeout: 20
         )
     }
 
