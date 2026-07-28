@@ -664,7 +664,14 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
         if let result = pollWorktreeResult(channelDir, intentID: intentID) {
             let ok = (result["ok"] as? Bool) ?? false
             if ok, let path = result["path"] as? String {
-                sendResult(id, textContent("Worktree created at \(path). This tool does not move your shell — cd into it yourself: `cd \(path)`"))
+                var msg = "Worktree created at \(path). This tool does not move your shell — cd into it yourself: `cd \(path)`"
+                // note が付いている場合、ベース最新化(git fetch)が何らかの理由でフォールバックし、
+                // ローカルの(陳腐化しうる)ブランチから作られている。Agent が気づかず古いベースの
+                // まま作業を続けないよう、成功メッセージに必ず付記する。
+                if let note = result["note"] as? String, !note.isEmpty {
+                    msg += "\nNote: \(note)"
+                }
+                sendResult(id, textContent(msg))
             } else {
                 let err = (result["error"] as? String) ?? "unknown error"
                 sendResult(id, textContent("Worktree creation failed: \(err)", isError: true))

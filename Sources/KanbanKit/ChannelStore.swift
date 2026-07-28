@@ -108,9 +108,13 @@ public struct WorktreeResult: Codable, Identifiable, Sendable {
     public let ok: Bool
     public let path: String?
     public let error: String?
+    /// ベースの最新化(fetch)がフォールバックした場合の理由。ok な結果に載っても
+    /// 「worktree は作れたが、ベースがローカルの陳腐化したブランチかもしれない」ことを示す。
+    /// (WorktreeService.ResolvedBase.note を素通しする。)
+    public let note: String?
 
-    public init(id: String, ok: Bool, path: String? = nil, error: String? = nil) {
-        self.id = id; self.ok = ok; self.path = path; self.error = error
+    public init(id: String, ok: Bool, path: String? = nil, error: String? = nil, note: String? = nil) {
+        self.id = id; self.ok = ok; self.path = path; self.error = error; self.note = note
     }
 }
 
