@@ -56,11 +56,24 @@ extension WorktreeService {
     /// 終了コードのまま(merge-base --is-ancestor 等の 0/1 判定はそのまま機能する)。
     @discardableResult
     public static func run(_ args: [String], in dir: String) throws -> String {
+        try run(args, in: dir, extraEnv: [:])
+    }
+
+    /// `run(_:in:)` の環境変数拡張版。`extraEnv` が空なら `Process.environment` を触らず
+    /// (nil のまま = 親プロセスの環境をそのまま継承)、既存呼び出し元の挙動を完全に維持する。
+    /// `fetchBase` が `GIT_TERMINAL_PROMPT=0` を注入するために使う。
+    @discardableResult
+    static func run(_ args: [String], in dir: String, extraEnv: [String: String]) throws -> String {
         let argv = ["git", "-C", dir] + args
         let command = argv.map(shellQuote).joined(separator: " ")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/zsh")
         p.arguments = ["-lc", command]
+        if !extraEnv.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            for (k, v) in extraEnv { env[k] = v }
+            p.environment = env
+        }
         let out = Pipe()
         let err = Pipe()
         p.standardOutput = out
@@ -138,6 +151,93 @@ extension WorktreeService {
         case .defaultBranch:
             return defaultBranch(repoRoot: repoRoot)
         }
+    }
+
+    /// `branch` の push 先リモート名を推定する。`branch.<branch>.remote` の設定(upstream)を
+    /// 優先し、無ければ `git remote` の最初の1行(=多くのリポジトリでは "origin")を使う。
+    /// リモートが1つも登録されていなければ nil。
+    public static func remoteName(repoRoot: String, forBranch branch: String) -> String? {
+        if let configured = try? run(["config", "--get", "branch.\(branch).remote"], in: repoRoot),
+           !configured.isEmpty {
+            return configured
+        }
+        if let remotes = try? run(["remote"], in: repoRoot) {
+            if let first = remotes.split(separator: "\n").first {
+                let name = String(first).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { return name }
+            }
+        }
+        return nil
+    }
+
+    /// `<remote>/<branch>` の追跡ブランチを最新化する(タグは取得しない)。
+    ///
+    /// CRITICAL: 認証が必要なリモート(private repo で資格情報キャッシュが無い等)に対して
+    /// うっかり `git fetch` を叩くと、対話プロンプトを出そうとしてハングし、Fleet の UI/Agent
+    /// 処理をブロックしてしまう。ここでは子プロセスがプロンプトを一切出せないようにする:
+    /// `GIT_TERMINAL_PROMPT=0` で git 自身の端末プロンプトを止め、`core.askPass=` /
+    /// `credential.helper=` を空にして GUI askpass やキャッシュ済み credential helper への
+    /// フォールバックも塞ぐ。これで認証不可能な状況では即座に失敗する(ハングしない)。
+    public static func fetchBase(repoRoot: String, remote: String, branch: String) throws {
+        try run(
+            ["-c", "core.askPass=", "-c", "credential.helper=", "fetch", "--no-tags", remote, branch],
+            in: repoRoot,
+            extraEnv: ["GIT_TERMINAL_PROMPT": "0"]
+        )
+    }
+
+    /// `resolveFreshBase` の結果。`ref` は `WorktreeService.create` の `baseRef` にそのまま渡せる。
+    public struct ResolvedBase: Sendable {
+        /// `create` の baseRef に渡す実際の ref(`<remote>/<base>` または `base` そのもの)。
+        public let ref: String
+        /// true なら fetch 済みのリモート追跡ブランチを使った(= 最新化に成功した)。
+        public let usedRemote: Bool
+        /// フォールバック(= 陳腐化しうるローカル `base` を使った)の場合のみ、その理由。
+        /// 呼び出し元は note が非nilなら必ずユーザー/Agent に見せること(サイレントな陳腐化を防ぐ)。
+        public let note: String?
+
+        public init(ref: String, usedRemote: Bool, note: String? = nil) {
+            self.ref = ref
+            self.usedRemote = usedRemote
+            self.note = note
+        }
+    }
+
+    /// worktree のベースを "最新化" して解決する。
+    ///
+    /// `base` はローカルブランチ名(UI のピッカーや intent の "current"/"default" 解決結果)。
+    /// ユーザーのローカルブランチには一切変更を加えない(pull もフェッチ後のFF更新もしない)。
+    /// これは他所(別 worktree 等)で checkout 中のブランチと衝突しないための最小びっくり設計。
+    /// 代わりに `<remote>/<base>` をfetchし、それが使えるならそちらを ref として返す。
+    ///
+    /// 失敗しうる分岐(リモート無し/fetch失敗/リモートにブランチが無い)は全て `note` 付きで
+    /// ローカル `base` へフォールバックする。この関数自身は決して throw しない
+    /// (呼び出し元は常にそのまま `create` に渡せる ref を得られる)。
+    public static func resolveFreshBase(repoRoot: String, base: String, fetch: Bool) -> ResolvedBase {
+        guard fetch else {
+            return ResolvedBase(ref: base, usedRemote: false, note: nil)
+        }
+        guard let remote = remoteName(repoRoot: repoRoot, forBranch: base) else {
+            return ResolvedBase(ref: base, usedRemote: false,
+                                 note: "リモートが無いためローカルの \(base) から作成します")
+        }
+        do {
+            try fetchBase(repoRoot: repoRoot, remote: remote, branch: base)
+        } catch let e as GitError {
+            let reason = e.message.trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: "\n").first.map(String.init) ?? e.message
+            return ResolvedBase(ref: base, usedRemote: false,
+                                 note: "\(remote) の取得に失敗したためローカルの \(base) から作成します(\(reason))")
+        } catch {
+            return ResolvedBase(ref: base, usedRemote: false,
+                                 note: "\(remote) の取得に失敗したためローカルの \(base) から作成します(\(error))")
+        }
+        let remoteRef = "refs/remotes/\(remote)/\(base)"
+        if let out = try? run(["rev-parse", "--verify", "--quiet", remoteRef], in: repoRoot), !out.isEmpty {
+            return ResolvedBase(ref: "\(remote)/\(base)", usedRemote: true, note: nil)
+        }
+        return ResolvedBase(ref: base, usedRemote: false,
+                             note: "リモートに \(base) が無いためローカルから作成します")
     }
 
     public static func create(repoRoot: String, branch: String, baseRef: String, baseDir: String) throws -> String {

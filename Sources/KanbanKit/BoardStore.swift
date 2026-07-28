@@ -429,12 +429,17 @@ public struct BoardStore {
         return .ok(fromUUID: fromUUID, cwd: cwd, existingRepoRoot: card.repoRoot)
     }
 
-    /// nonisolated: 純粋な git 操作のみ(repoRoot 解決 + worktree create)。SwiftData には
-    /// 一切触れないので、MainActor の内外どちらから呼んでも(sync 版はそのまま、async 版は
-    /// `Task.detached` の中から)安全。引数・戻り値はすべて値型 (String/enum/Result)。
+    /// nonisolated: 純粋な git 操作のみ(repoRoot 解決 + ベース最新化 + worktree create)。
+    /// SwiftData には一切触れないので、MainActor の内外どちらから呼んでも(sync 版はそのまま、
+    /// async 版は `Task.detached` の中から)安全。引数・戻り値はすべて値型 (String/enum/Result)。
+    ///
+    /// Agent 経由(MCP `fleet_worktree_create`)の intent も UI からの作成と同じ「ローカル
+    /// base ブランチが陳腐化している」問題を踏むため、`resolveFreshBase` で origin から
+    /// フェッチしたリモート追跡ブランチを優先する(fetch: true)。フォールバックした場合の
+    /// note は呼び出し元(finishWorktreeIntent)に伝え、WorktreeResult 経由で Agent に返す。
     private nonisolated static func performWorktreeGit(
         cwd: String, existingRepoRoot: String?, branch: String, base: WorktreeBase
-    ) -> Result<(repoRoot: String, path: String), WorktreeService.GitError> {
+    ) -> Result<(repoRoot: String, path: String, note: String?), WorktreeService.GitError> {
         do {
             let repoRoot: String
             if let r = existingRepoRoot {
@@ -444,9 +449,10 @@ public struct BoardStore {
             } else {
                 return .failure(WorktreeService.GitError(message: "not a git repository: \(cwd)"))
             }
-            let baseRef = WorktreeService.resolveBase(base, repoRoot: repoRoot)
-            let path = try WorktreeService.create(repoRoot: repoRoot, branch: branch, baseRef: baseRef, baseDir: WorktreeService.defaultWorktreeBaseDir)
-            return .success((repoRoot, path))
+            let localBase = WorktreeService.resolveBase(base, repoRoot: repoRoot)
+            let resolved = WorktreeService.resolveFreshBase(repoRoot: repoRoot, base: localBase, fetch: true)
+            let path = try WorktreeService.create(repoRoot: repoRoot, branch: branch, baseRef: resolved.ref, baseDir: WorktreeService.defaultWorktreeBaseDir)
+            return .success((repoRoot, path, resolved.note))
         } catch let e as WorktreeService.GitError {
             return .failure(e)
         } catch {
@@ -460,17 +466,17 @@ public struct BoardStore {
     /// 必ずここで取り直す)。
     private func finishWorktreeIntent(
         _ intent: WorktreeIntent, fromUUID: UUID,
-        gitOutcome: Result<(repoRoot: String, path: String), WorktreeService.GitError>
+        gitOutcome: Result<(repoRoot: String, path: String, note: String?), WorktreeService.GitError>
     ) -> WorktreeResult {
         switch gitOutcome {
         case .failure(let e):
             return WorktreeResult(id: intent.id, ok: false, error: e.message)
-        case .success(let (repoRoot, path)):
+        case .success(let (repoRoot, path, note)):
             guard let card = card(withID: fromUUID) else {
                 // await 中にカードが削除された。worktree はディスク上に作られてしまっているが、
                 // バインド先が無いので安全側に倒してエラーとして報告する(孤児 worktree はユーザーが
                 // 「ターミナルを開いて手動で処理」等で発見できるよう、パスをメッセージに残す)。
-                return WorktreeResult(id: intent.id, ok: false, error: "card was removed while creating worktree: \(path)")
+                return WorktreeResult(id: intent.id, ok: false, error: "card was removed while creating worktree: \(path)", note: note)
             }
             if card.isFleetOwnedWorktree, card.worktreePath != nil {
                 // await 中に別経路で既にバインドされた(理論上は per-channel in-flight ガードで
@@ -480,7 +486,10 @@ public struct BoardStore {
             do {
                 try setWorktree(card, repoRoot: repoRoot, worktreePath: path,
                                 branch: WorktreeService.sanitizeBranch(intent.branch), fleetOwned: true)
-                return WorktreeResult(id: intent.id, ok: true, path: path)
+                // note != nil はベース最新化がフォールバックした(陳腐化しうるローカルブランチから
+                // 作成した)ことを意味する。ok な結果に紛れて消えないよう note をそのまま乗せて
+                // Agent に伝える(fleet-bridge 側が成功メッセージに付記する)。
+                return WorktreeResult(id: intent.id, ok: true, path: path, note: note)
             } catch {
                 return WorktreeResult(id: intent.id, ok: false, error: "\(error)")
             }
