@@ -123,10 +123,14 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         // Working/Blocked が来たら保留中の Idle 確定を取り消す(チラつき防止)。
         if state != .idle { idleConfirmTask?.cancel(); idleConfirmTask = nil }
         guard let card = BoardStore(context: context).card(withID: cardID) else { return }
+        // Done(未読)の判定とシステム通知の判定は同じもの。定義が二重化しないよう
+        // KanbanKit の純ロジックに一本化し、seen もその結果から落とす。
+        let viewing = isViewing()
+        let notification = AgentNotification.decide(previous: lastState, current: state, isViewing: viewing)
         var changed = false
-        if isViewing() {
+        if viewing {
             if !card.seen { card.seen = true; changed = true }
-        } else if state == .idle && lastState == .working {
+        } else if notification == .done {
             if card.seen { card.seen = false; changed = true }   // 別画面にいる間に完了 → Done(未読)
         }
         if card.agentState != state { card.agentState = state; changed = true }
@@ -138,6 +142,11 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         }
         lastState = state
         if changed { try? context.save(); onStateChange?(cardID) }
+        // 通知は「盤面を見ていない」ケースのために出すので、保存の成否とは独立に投げる。
+        if let notification {
+            Notifier.shared.post(notification, cardID: cardID, cardTitle: card.title,
+                                 question: card.blockedPrompt)
+        }
     }
 
     private static func path(fromOSC7 s: String) -> String? {
