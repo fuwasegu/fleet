@@ -192,25 +192,62 @@ struct BoardStoreTests {
         #expect(titles == ["1", "2", "0"])
     }
 
-    // アプリ起動時: 端末は消えているので全カードを CC 未起動状態へ戻す
-    @Test func resetAgentStatesClearsRuntimeState() throws {
+    // アプリ起動時: 端末は消えているので稼働系(agentState / blockedPrompt)は全カード
+    // CC 未起動状態へ戻す。ただし `seen` には触れない(下の resetAgentStatesPreservesUnread 参照)。
+    @Test func resetAgentStatesClearsLiveState() throws {
         let store = try makeStore()
         let a = try store.addColumn(name: "A")
         let working = try store.addCard(title: "w", to: a)
         working.agentState = .working
         let blocked = try store.addCard(title: "b", to: a)
         blocked.agentState = .blocked
-        blocked.seen = false
         blocked.blockedPrompt = "Do you want to proceed?"
 
         try store.resetAgentStates()
 
-        for card in a.cards {
-            #expect(card.agentState == .unknown)
-            #expect(card.seen == true)
-            #expect(card.blockedPrompt == nil)
-            #expect(card.isDone == false)
-        }
+        #expect(working.agentState == .unknown)
+        #expect(blocked.agentState == .unknown)
+        #expect(blocked.blockedPrompt == nil)
+    }
+
+    // バグ回帰: 「よそ見中に完了した(未読)」という事実は端末セッションと無関係に成立するので、
+    // resetAgentStates() が agentState を .unknown へ戻しても未読(Done 表示)のまま残ること。
+    @Test func resetAgentStatesPreservesUnread() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(title: "c", to: a)
+        c.agentState = .idle
+        c.seen = false
+
+        try store.resetAgentStates()
+
+        #expect(c.seen == false)
+        #expect(c.agentState == .unknown)
+        #expect(c.isDone == true)
+    }
+
+    // 未読(seen == false)でも、Agent が今まさに稼働中/承認待ちなら Done 表示にはならない。
+    @Test func isDoneFalseWhileAgentActive() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let working = try store.addCard(title: "w", to: a)
+        working.agentState = .working
+        working.seen = false
+        #expect(working.isDone == false)
+
+        let blocked = try store.addCard(title: "b", to: a)
+        blocked.agentState = .blocked
+        blocked.seen = false
+        #expect(blocked.isDone == false)
+    }
+
+    // 新規カードは seen == true がデフォルトなので未読(Done)扱いにはならない。
+    @Test func newCardIsNotUnread() throws {
+        let store = try makeStore()
+        let a = try store.addColumn(name: "A")
+        let c = try store.addCard(title: "c", to: a)
+        #expect(c.seen == true)
+        #expect(c.isDone == false)
     }
 
     // MARK: - Channel (A2A)

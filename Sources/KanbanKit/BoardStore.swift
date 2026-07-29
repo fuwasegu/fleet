@@ -130,13 +130,15 @@ public struct BoardStore {
     }
 
     /// アプリ起動時に呼ぶ。端末セッションはプロセスと共に消えるため、全カードを
-    /// 「CC 未起動」状態(unknown / 既読 / 問いなし)にリセットして、表示と実体の齟齬を防ぐ。
+    /// 「CC 未起動」状態(unknown / 問いなし)にリセットして、表示と実体の齟齬を防ぐ。
+    /// `seen`(未読/既読)には触れない — 「Agent がよそ見中に完了した」という事実は
+    /// 端末セッションと違ってプロセスの生死に紐付かないため、再起動後も持ち越して良い
+    /// (`Card.isDone` は `.unknown` になっても `!seen` を見て Done/未読を維持する)。
     public func resetAgentStates() throws {
         let cards = try context.fetch(FetchDescriptor<Card>())
         var changed = false
         for card in cards {
             if card.agentState != .unknown { card.agentState = .unknown; changed = true }
-            if !card.seen { card.seen = true; changed = true }
             if card.blockedPrompt != nil { card.blockedPrompt = nil; changed = true }
         }
         if changed { try context.save() }
