@@ -1,7 +1,8 @@
-# DONE / BLOCKED のシステム通知 — 設計
+# DONE / BLOCKED の通知 — 設計
 
 作成日: 2026-07-28
-ステータス: 承認済み（実装着手）
+更新日: 2026-07-29（システム通知 → Dock へ方式変更。「結論」節を参照）
+ステータス: 実装済み（v0.9.2）
 
 ## 背景と動機
 
@@ -10,17 +11,19 @@ Fleet はカードの状態（Working / Blocked / Done / Idle）を端末出力�
 承認待ちで止まっていても、他のアプリを触っていれば放置時間がそのまま積み上がる。
 上部バーの要対応バッジ（`BoardView.attentionCards`）は Fleet 自身が前面にいる時にしか効かない。
 
-macOS のシステム通知を出せば、Fleet が背面でも「どのカードが終わったか」が届く。
-通知にはカード名を載せる（どのタスクの話かが分からなければ通知の意味がない）。
+Fleet が背面にいても手番が来たことが届くようにする。
+
+当初はカード名をタイトルにした macOS のシステム通知で実装したが、自己署名配布では
+原理的に使えないことが分かり、Dock のバウンス + バッジ + 音に差し替えた（「結論」節）。
 
 ## 決定事項（確定）
 
 | 項目 | 決定 |
 |---|---|
 | 発火条件 | エージェント状態の遷移。カードを Done 列へドラッグした時ではない |
-| 通知する状態 | DONE（完了・未読）と BLOCKED（承認待ち）の2種 |
-| 通知本文 | タイトル = カード名。副題 = 「完了」/「承認待ち」、Blocked は問いを本文に |
-| クリック時 | Fleet を前面に出し、そのカードのターミナルを開く |
+| 知らせる状態 | DONE（完了・未読）と BLOCKED（承認待ち）の2種 |
+| 伝達手段 | Dock アイコンのバウンス + 要対応件数のバッジ + 音（当初はシステム通知） |
+| どのカードか | 盤面上部の「要対応」リスト（カード名が並ぶ）。Dock には名前を出せない |
 | 表示中の抑制 | そのカードのターミナルを開いている間は発火しない |
 | 設定 | DONE / BLOCKED を個別にオン・オフ（既定はどちらもオン） |
 
@@ -39,7 +42,7 @@ public var isDone: Bool { agentState == .idle && !seen }
 
 ## アーキテクチャ
 
-`AgentDetection` と同じ方針で分ける。**判定は KanbanKit の純粋ロジック、配信はアプリ側**。
+`AgentDetection` と同じ方針で分ける。**判定は KanbanKit の純粋ロジック、伝達はアプリ側**。
 
 ```
 AgentStateMonitor.apply()          [KanbanTerm]  端末 → 状態
@@ -48,12 +51,8 @@ AgentStateMonitor.apply()          [KanbanTerm]  端末 → 状態
 AgentNotification.decide()         [KanbanKit]   純粋関数・ユニットテスト対象
       │  Kind? (.done / .blocked)
       ▼
-Notifier.post(kind:card:)          [KanbanTerm]  UNUserNotificationCenter
-      │  クリック
-      ▼
-NotificationRouter.pendingCardID   [KanbanTerm]  @Observable
-      ▼
-BoardView → uiState.terminalCardID = id
+Notifier.signal(kind)              [KanbanTerm]  Dock バウンス + 音
+                                                 （バッジは BoardView が要対応件数から更新）
 ```
 
 ### 1. 判定ロジック（KanbanKit / `AgentNotification.swift`）
@@ -81,36 +80,35 @@ public enum AgentNotification {
 - `blocked → blocked`: 端末出力のたびに再評価されるが、遷移していないので通知しない。
 - `isViewing == true`: 目の前で見ているものを通知しない。
 
-### 2. 配信（KanbanTerm / `Notifier.swift`）
+### 2. 伝達（KanbanTerm / `Notifier.swift`）
 
-`UNUserNotificationCenter` のローカル通知。
+権限を必要としない Dock の機構だけを使う。
 
-- `content.title` = カード名（`Card.title`）
-- `.done` … subtitle「完了」
-- `.blocked` … subtitle「承認待ち」、body に `Card.blockedPrompt`（あれば）
-- `identifier = "card-<uuid>-<kind>"` … 同一カード・同一種別の未読通知は上書きされ、積み上がらない
-- `threadIdentifier = cardID` … 通知センターでカード単位にまとまる
-- `userInfo["cardID"]` … クリック時の遷移先
-- 起動時に `requestAuthorization([.alert, .sound])`。拒否・失敗時は静かに no-op
-- `willPresent` → `[.banner, .sound]`。Fleet が前面でも banner を出す
-  （そのカードの端末を開いている場合はそもそも `decide` が nil を返すので出ない）
+- `.blocked` … `NSSound(named: "Funk")` + `NSApp.requestUserAttention(.criticalRequest)`
+  （応答が要るので、戻ってくるまで跳ね続ける）
+- `.done` … `NSSound(named: "Glass")` + `.informationalRequest`（一度だけ跳ねる）
+- Dock バッジ … `NSApp.dockTile.badgeLabel = AgentNotification.badgeLabel(attentionCount:)`。
+  件数は `BoardView.attentionCards`（承認待ち or 未読完了、開いているカードは除く）から取り、
+  対応し終えて盤面に戻ると自然に減る。0 件で消える
 
-設定トグルの参照は配信層で行う。判定ロジックは設定を知らない。
+設定トグルの参照はここで行う。判定ロジックは設定を知らない。
 
-### 3. クリック導線（KanbanTerm）
+Fleet が前面にいるとき Dock は反応しない = 見えているので不要、という macOS の挙動に乗る。
 
-`UNUserNotificationCenterDelegate` は SwiftUI ビュー階層の外にいるため、`@Observable` な
-`NotificationRouter` を挟む。`didReceive` で `NSApp.activate()` し `pendingCardID` を立て、
-`BoardView` が `.onChange` で `uiState.terminalCardID` に流す。カードが既に削除されて
-いれば無視する。これは要対応ポップオーバーからのジャンプ（`BoardView.swift:162`）と同じ導線。
+### 3. 「どのカードか」（KanbanTerm）
+
+Dock にはカード名を出せない。これは既存の**盤面上部の「要対応」ポップオーバー**が担う
+（`BoardView.attentionPopover`）。カード名が並び、行をタップでそのカードのターミナルへ切り替わる。
+Dock クリックで Fleet が前面に出れば、バッジの件数とこのリストで「誰が待っているか」が分かる。
 
 ### 4. 設定（`TerminalSettings.swift`）
 
 `TerminalSettingsPopover` に「通知」セクションを追加。
 
-- `完了 (DONE) を通知` — `@AppStorage("notifyOnDone")`、既定 `true`
-- `承認待ち (BLOCKED) を通知` — `@AppStorage("notifyOnBlocked")`、既定 `true`
-- OS 側で通知が拒否されている場合はヒント文と「システム設定を開く」ボタン
+- `完了 (DONE) を知らせる` — `@AppStorage("notifyOnDone")`、既定 `true`
+- `承認待ち (BLOCKED) を知らせる` — `@AppStorage("notifyOnBlocked")`、既定 `true`
+
+OS の許可は不要なので、権限まわりの UI は無い。
 
 ## テスト
 
@@ -127,45 +125,85 @@ public enum AgentNotification {
 | working | blocked | true | `nil` |
 | blocked | working | false | `nil` |
 
-配信層（`UNUserNotificationCenter`）はユニットテストの対象外。実機で手動確認する。
+同じファイルに Dock バッジの表示判定 `badgeLabel(attentionCount:)` のテスト
+（0 件と負数で `nil` = バッジを消す、正数はそのまま文字列に）。
 
-## リスクと検証状況（実装後に追記）
+Dock / 音（AppKit の副作用）はユニットテストの対象外。実機で手動確認する。
 
-**通知が実際に配信されるところは未検証のまま v0.9.0 をリリースし、本番で確認する**
-という判断を取った。以下は判断の材料。
+## 結論（v0.9.2 で方式変更）
 
-`project.yml` は `CODE_SIGNING_ALLOWED: NO` のため、ローカルの開発ビルドは
-ad-hoc 署名（arm64 ではリンカが自動付与するため「未署名」は存在しない）。
-これで `UNUserNotificationCenter` が使えるかを、使い捨ての最小 .app バンドルで実測した。
+**`UNUserNotificationCenter` は Fleet では使えない。** 自己署名配布のため Gatekeeper に
+rejected され、その状態のアプリは `requestAuthorization` が許可ダイアログを出さないまま
+`denied` になる。Dock のバウンス + バッジ + 音に差し替えた（下の「実測」参照）。
+
+以下、当初設計のうち **変わっていない部分**:
+
+- 発火条件（`AgentNotification.decide`）とその呼び出し位置（`AgentStateMonitor.apply()`）
+- DONE / BLOCKED の2種、開いているカードでは鳴らさない
+- 設定での種別ごとのオン・オフ
+
+**変わった部分**:
+
+| | 当初 | 現在 |
+|---|---|---|
+| 伝達手段 | システム通知（タイトル = カード名） | Dock バウンス + バッジ（件数）+ 音 |
+| カード名 | 通知タイトルに出す | **Dock には出せない**。盤面上部の「要対応」リストが担う |
+| クリック導線 | 通知タップ → そのカードの端末 | Dock クリックで Fleet が前面に → 「要対応」から選ぶ |
+| 権限 | `requestAuthorization` が必要 | 不要 |
+| 音の別 | 共通 | BLOCKED は Funk + 戻るまで跳ね続ける / DONE は Glass + 一度だけ |
+
+`NotificationRouter`（delegate → SwiftUI の橋渡し）は不要になったので削除した。
+
+## 実測: なぜシステム通知が使えないか
+
+v0.9.0 / v0.9.1 では実際に通知が届かなかった。使い捨ての最小 .app バンドルを段階的に
+条件を変えて実測し、原因を特定した。
+
+### スパイクの結果
 
 | 条件 | `requestAuthorization` | `add` |
 |---|---|---|
-| ad-hoc 署名 | `granted=false` / `UNErrorDomain` Code 1 | 失敗 Code 1 |
-| 実証明書で署名（未使用 bundle id・Info.plist 完備） | `granted=false` / Code 1 | 成功 (`err=nil`) |
+| ad-hoc 署名（`CODE_SIGNING_ALLOWED=NO` のローカルビルド相当） | `denied` / Code 1 | 失敗 Code 1 |
+| Apple Development 署名・裸のアプリ（ウィンドウなし） | `denied` / Code 1 | 成功 |
+| Apple Development 署名・SwiftUI の実ウィンドウあり・`applicationDidFinishLaunching` で要求 | `notDetermined` → **ダイアログなしで `denied`** | 成功 |
 
-署名の質で `add` の成否は変わったが、**どちらも許可が下りず、許可ダイアログも
-観測できなかった**。スパイクがウィンドウを一つも持たない裸のアプリだったことが
-原因の可能性が高い（許可ダイアログの提示にフォアグラウンドのウィンドウを要する）が、
-**これは仮説であり未検証**。Fleet 本体は実ウィンドウと Xcode 生成の完全な Info.plist を
-持つため条件が異なる。
+ウィンドウの有無も要求タイミングも効かなかった。`add` は成功するので**呼び出し側は
+正しく、ただ表示されない**。
 
-なお会社管理 Mac の MDM に `com.apple.notificationsettings` プロファイルがあるが、
-中身は業務アプリ28個を強制許可するホワイトリストで他アプリを禁止するものではなく、
-Slack / Chrome / Ghostty 等は通常どおり通知登録されている。これは原因ではない。
+### 決め手: Gatekeeper 評価との相関
 
-配布物は `scripts/sign-app.sh` で自己署名される（`/Applications/Fleet.app` は
-`TeamIdentifier=not set` の実証明書で署名済み）ので、上表の下段の条件になる。
+| アプリ | `spctl -a -vv` | 通知 |
+|---|---|---|
+| Fleet（自己署名） | **rejected** `origin=Fleet Self-Signed (fuwasegu)` | 通知設定に登録すらされない |
+| スパイク（Apple Development 署名） | **rejected** | ダイアログ出ず `denied` |
+| Ghostty / Slack / Claude / iTerm | accepted `Notarized Developer ID` | 動く |
 
-**確認すべきこと（リリース後）**: 通知が配信されるか / 初回起動で許可ダイアログが
-出るか / クリックで該当カードのターミナルが開くか。出なければ、ローカルの開発ビルドは
-ad-hoc のままでは検証できないので、実証明書で署名して再現を取る。
+この Mac の通知設定（`~/Library/Preferences/com.apple.ncprefs.plist`）に登録されている
+サードパーティアプリは**すべて Notarized Developer ID**。Gatekeeper に rejected される
+署名のアプリは、許可ダイアログが出ないまま `denied` になる。
+
+**つまり通知センターを使うには Apple Developer Program での Developer ID 署名 +
+notarization が必要**。署名の有無ではなく、署名の「種類」が効いていた。
+
+### 除外した要因
+
+- **quarantine 属性**: `/Applications/Fleet.app` には付いていない（`com.apple.provenance` のみ）
+- **MDM の制限**: `com.apple.notificationsettings` プロファイルはあるが、業務アプリ28個を
+  強制許可するホワイトリストで、他アプリを禁止するものではない。`com.apple.applicationaccess`
+  にも通知関連の制限なし
+- **集中モード**: アサーションなし
+- **要求タイミング**: 当初 `KanbanTermApp.init()` で呼んでいたのが早すぎるという仮説を
+  持ったが、`applicationDidFinishLaunching` で呼ぶスパイクでも同じ結果だった
+
+なお、この Mac では `log show` が何も返さない（管理設定による制限）ため、
+通知デーモン側のログは証拠に使えなかった。
 
 ## やらないこと（YAGNI）
 
 - カードを Done 列へドラッグしたことによる通知（列名依存になる）
 - Working / Idle の通知
-- 通知音のカスタマイズ、通知履歴画面
-- 通知アクションボタン（返信・スヌーズ等）
+- 音のカスタマイズ
+- Developer ID 署名 + notarization（通知センターを使いたくなったら再検討）
 
 ## 影響ファイル
 
@@ -173,10 +211,9 @@ ad-hoc のままでは検証できないので、実証明書で署名して再�
 |---|---|
 | `Sources/KanbanKit/AgentNotification.swift` | 新規（判定ロジック） |
 | `Tests/KanbanKitTests/AgentNotificationTests.swift` | 新規（遷移表テスト） |
-| `Sources/KanbanTerm/Views/Notifier.swift` | 新規（配信 + ルータ） |
+| `Sources/KanbanTerm/Views/Notifier.swift` | 新規（Dock バウンス + バッジ + 音） |
 | `Sources/KanbanTerm/Views/TerminalView.swift` | `apply()` を `decide()` 経由に |
-| `Sources/KanbanTerm/Views/BoardView.swift` | クリック遷移の受け口 |
-| `Sources/KanbanTerm/KanbanTermApp.swift` | 起動時の権限要求・delegate 設定 |
+| `Sources/KanbanTerm/Views/BoardView.swift` | 要対応件数 → Dock バッジ |
 | `Sources/KanbanTerm/Views/TerminalSettings.swift` | 通知トグル |
 | `Sources/KanbanTerm/en.lproj/Localizable.strings` | 英語文言 |
 | `README.md` / `README.ja.md` / `docs/index.html` | 機能の追記 |

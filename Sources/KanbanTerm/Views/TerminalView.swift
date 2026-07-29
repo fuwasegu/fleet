@@ -142,11 +142,8 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         }
         lastState = state
         if changed { try? context.save(); onStateChange?(cardID) }
-        // 通知は「盤面を見ていない」ケースのために出すので、保存の成否とは独立に投げる。
-        if let notification {
-            Notifier.shared.post(notification, cardID: cardID, cardTitle: card.title,
-                                 question: card.blockedPrompt)
-        }
+        // 知らせるのは「盤面を見ていない」ケースのためなので、保存の成否とは独立に呼ぶ。
+        if let notification { Notifier.shared.signal(notification) }
     }
 
     private static func path(fromOSC7 s: String) -> String? {

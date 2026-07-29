@@ -134,21 +134,15 @@ struct BoardView: View {
         // 端末を閉じてカンバンに戻った時 / アプリが前面に来た時に、稼働カードの
         // cwd→ブランチ→PR を再取得する(端末オーバーレイ表示中は盤面が見えないので更新しない)。
         .onChange(of: uiState.terminalCardID) { _, v in
-            if let v {
-                Notifier.shared.clear(cardID: v)   // 開いた = 用が済んだので通知を取り下げる
-            } else {
-                refreshVisibleGitInfo()
-            }
+            if v == nil { refreshVisibleGitInfo() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { refreshVisibleGitInfo() }
         }
-        // システム通知のタップ → そのカードのターミナルへ。要対応ポップオーバーと同じ導線。
-        .onChange(of: NotificationRouter.shared.pendingCardID) { _, id in
-            guard let id else { return }
-            NotificationRouter.shared.pendingCardID = nil
-            guard BoardStore(context: context).card(withID: id) != nil else { return }   // 削除済みなら無視
-            uiState.terminalCardID = id
+        // Dock バッジ = 要対応件数。開いているカードは attentionCards から除かれるので、
+        // 対応し終えて盤面に戻ると自然に減る。
+        .onChange(of: attentionCards.count, initial: true) { _, n in
+            Notifier.shared.updateBadge(attentionCount: n)
         }
     }
 
