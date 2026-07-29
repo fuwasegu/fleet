@@ -26,7 +26,6 @@ struct KanbanTermApp: App {
         // 起動時: 端末セッションは消えているので、全カードを CC 未起動状態にリセットする。
         MainActor.assumeIsolated {
             try? BoardStore(context: container.mainContext).resetAgentStates()
-            Notifier.shared.start()   // 通知の delegate 登録 + 権限要求
         }
     }
 

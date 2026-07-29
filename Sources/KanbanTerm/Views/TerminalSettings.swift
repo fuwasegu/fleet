@@ -79,7 +79,6 @@ struct TerminalSettingsPopover: View {
     @AppStorage("appLanguage") private var appLanguage = "system"
     @AppStorage(Notifier.notifyOnDoneKey) private var notifyOnDone = true
     @AppStorage(Notifier.notifyOnBlockedKey) private var notifyOnBlocked = true
-    @State private var notificationsDenied = false
 
     private let families = TerminalSettings.monospacedFamilies()
 
@@ -100,20 +99,11 @@ struct TerminalSettingsPopover: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("通知").font(.headline)
-                Toggle("完了 (DONE) を通知", isOn: $notifyOnDone)
-                Toggle("承認待ち (BLOCKED) を通知", isOn: $notifyOnBlocked)
-                Text("そのカードのターミナルを開いていないときだけ、カード名付きでシステム通知を出します。")
+                Toggle("完了 (DONE) を知らせる", isOn: $notifyOnDone)
+                Toggle("承認待ち (BLOCKED) を知らせる", isOn: $notifyOnBlocked)
+                Text("そのカードのターミナルを開いていないときだけ、Dock アイコンを跳ねさせて音を鳴らします。どのカードかは上部の「要対応」から。")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if notificationsDenied {
-                    Button {
-                        Self.openNotificationSettings()
-                    } label: {
-                        Label("システム設定で Fleet の通知を許可", systemImage: "exclamationmark.triangle")
-                    }
-                    .buttonStyle(.link)
-                }
             }
-            .task { notificationsDenied = await Notifier.isDenied() }
 
             Divider()
 
@@ -187,12 +177,6 @@ struct TerminalSettingsPopover: View {
         .onChange(of: fontName) { _, _ in sessions.applyFont() }
         .onChange(of: fontSize) { _, _ in sessions.applyFont() }
         .onChange(of: themeID) { _, _ in sessions.applyTheme() }
-    }
-
-    /// システム設定 > 通知 を開く(Fleet が通知拒否されている場合の導線)。
-    private static func openNotificationSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
-        NSWorkspace.shared.open(url)
     }
 
     /// ~/.fleet/FLEET.md を(無ければテンプレ付きで作成して)既定のエディタで開く。

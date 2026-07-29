@@ -52,6 +52,23 @@ struct AgentNotificationTests {
         #expect(d(.working, .blocked, viewing: true) == nil)
     }
 
+    // MARK: Dock バッジ
+
+    @Test func zeroAttentionClearsBadge() {
+        // nil を返さないと「0」が Dock に出たままになる
+        #expect(AgentNotification.badgeLabel(attentionCount: 0) == nil)
+    }
+
+    @Test func attentionCountBecomesBadgeLabel() {
+        #expect(AgentNotification.badgeLabel(attentionCount: 1) == "1")
+        #expect(AgentNotification.badgeLabel(attentionCount: 12) == "12")
+    }
+
+    @Test func negativeAttentionCountClearsBadge() {
+        // 呼び出し側の計算が壊れても Dock に "-1" を出さない
+        #expect(AgentNotification.badgeLabel(attentionCount: -1) == nil)
+    }
+
     // MARK: その他の遷移は無音
 
     @Test func blockedToWorkingIsSilent() {

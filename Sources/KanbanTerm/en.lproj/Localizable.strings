@@ -94,7 +94,6 @@
 "届いた A2A メッセージがあります(次に手が空いたら反映されます)" = "An A2A message is waiting (it will be delivered when this agent is next idle).";
 "完了" = "Done";
 "通知" = "Notifications";
-"完了 (DONE) を通知" = "Notify when done";
-"承認待ち (BLOCKED) を通知" = "Notify when waiting for approval";
-"そのカードのターミナルを開いていないときだけ、カード名付きでシステム通知を出します。" = "Sends a system notification with the card name — only while you are not looking at that card’s terminal.";
-"システム設定で Fleet の通知を許可" = "Allow Fleet notifications in System Settings";
+"完了 (DONE) を知らせる" = "Tell me when done";
+"承認待ち (BLOCKED) を知らせる" = "Tell me when waiting for approval";
+"そのカードのターミナルを開いていないときだけ、Dock アイコンを跳ねさせて音を鳴らします。どのカードかは上部の「要対応」から。" = "Bounces the Dock icon and plays a sound — only while you are not looking at that card’s terminal. Which card it was is in “Needs attention” at the top.";

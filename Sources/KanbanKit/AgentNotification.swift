@@ -32,4 +32,9 @@ public enum AgentNotification {
             return nil
         }
     }
+
+    /// Dock バッジの表示文字列。0 件以下は nil(= バッジを消す)。
+    public static func badgeLabel(attentionCount: Int) -> String? {
+        attentionCount > 0 ? String(attentionCount) : nil
+    }
 }
