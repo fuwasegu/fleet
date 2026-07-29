@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 /// Agent 状態。herdr 実装準拠（`kanban_ui.fsl` の AgentSt）。
-/// "Done" は独立状態ではなく (idle かつ未閲覧) の派生（`Card.isDone`）。
+/// "Done" は独立状態ではなく未閲覧(`seen == false`)から導かれる派生（`Card.isDone`）。
 public enum AgentState: String, Codable, CaseIterable, Sendable {
     case unknown
     case idle
@@ -146,8 +146,13 @@ public final class Card {
         set { agentKindRaw = newValue.rawValue }
     }
 
-    /// "Done" 表示 = 完了(idle) かつ 未閲覧
-    public var isDone: Bool { agentState == .idle && !seen }
+    /// "Done" 表示 = 未閲覧の完了報告が残っている かつ 今まさに稼働/承認待ちではない。
+    /// `agentState == .idle` を必須にしないのは、アプリ再起動直後は `resetAgentStates()`
+    /// が全カードを `.unknown` に戻すため(端末セッションはプロセスと共に消えるので idle か
+    /// どうかはもう分からない)。それでも `seen == false`(未読)という事実そのものは
+    /// 再起動を跨いで保持したいので、`.unknown` でも Done/未読として扱う。逆に `.working`/
+    /// `.blocked` は今まさに動いている/応答待ちであり「完了」ではないので除外する。
+    public var isDone: Bool { !seen && agentState != .working && agentState != .blocked }
 
     /// cwd 解決: worktree バインディングがあれば優先し、無ければ従来の作業ディレクトリ
     public var effectiveCwd: String? { worktreePath ?? workingDirPath }
