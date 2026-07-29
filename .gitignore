@@ -21,6 +21,9 @@ xcuserdata/
 # Misc
 *.log
 
+# Superpowers brainstorming mockups (ローカル作業用)
+.superpowers/
+
 # Signing (never commit private keys)
 *.p12
 *.pem
