@@ -1,0 +1,118 @@
+// Fleet: 差分を確認したうえでの worktree 強制削除(v0.9.3)。
+// worktree_deletion_fixed.fsl(v0.7.3)の後継。
+//
+// 旧設計の問題: risk 分類は untracked も dirty として報告するため、`.serena/` のような
+//   捨てて構わないゴミ1つで削除ルートが完全に塞がる。invariant
+//   NeverRemoveWhileDirtyOrUnpushed は「何もしない」で常に満たせてしまい、許されるべき
+//   結末(捨てていい差分なら消せる)への到達性が失われていた。
+//
+// THE CHANGE: 安全性を「状態」の不変条件から「損失」の不変条件へ組み替える。
+//   旧: removed => not dirty and not unpushed
+//   新: discarded_uncommitted => reviewed_diff   (差分を見せずに未コミット変更は捨てない)
+//   NeverRemoveWhileInUse はそのまま維持する(走っているプロセスの cwd を消すのは別種の事故)。
+//   実装では reviewed_diff の担保が UI 層(WorktreeForceDeleteSheet を通らないと
+//   removeForcibly に到達しない)にあり、サービス層は inUse ガードとブランチ保持だけを守る。
+//
+// 「コミットは失われない」の表し方: 当初 branch_kept 変数 + invariant (removed => branch_kept)
+//   で書いたが、それを false にするアクションがそもそも存在しないため fslc が
+//   tautology_over_frozen を報告した(正しい指摘 — その不変条件は何も検査していない)。
+//   ブランチを消さないことはこのスペックの構造そのもの(ref を触るアクションが1つも無い)
+//   なので、代わりに歯のある到達性 UnpushedCommitsSurviveForcedRemoval で
+//   「未プッシュコミットを抱えたまま強制削除される実行が存在する」ことを witness させる。
+//   実際にブランチと SHA が残ることの実行可能な証拠は Swift 側のテスト
+//   WorktreeForceDeleteGitTests.forceRemovalDiscardsWorkingTreeButKeepsBranchAndCommits。
+//
+// ASSUME-1(表現のみ): カードは1枚。worktree の bound、session 生存、汚れ具合を状態に持つ。
+// ASSUME-2(worktree_deletion_*.fsl と同一): delete_requested が立っている間は
+//   make_dirty/make_unpushed を無効化する。要求後も環境が無限に汚し続ければ進行性は
+//   原理的に成立しないため、スコープを揃えるための前提。
+// ASSUME-3(この版で追加): delete_requested が立っている間は start_session も無効化する。
+//   review_diff / force_remove_after_review はどちらも `not session_live` を要求するので、
+//   start_session と end_session が交互に発火し続けると弱公平性の前提(継続的 enabled)が
+//   途切れ、leadsTo に偽の反例が出る。バグではなくモデル上の干渉なので前提で切る
+//   (worktree_deletion_fixed.fsl の MODELING NOTE と同じ性質の話)。
+spec WorktreeForceDelete "design: v0.9.3 差分確認つき強制削除ルート" {
+  state {
+    bound:            Bool,
+    session_live:     Bool,
+    dirty:            Bool,   // 未コミット変更(未追跡を含む)がある
+    unpushed:         Bool,   // 未プッシュ/未マージのコミットがある
+    delete_requested: Bool,   // ユーザーが削除を要求した(sticky)
+    reviewed_diff:    Bool,   // 差分確認シートで中身を提示した
+    removed:          Bool,
+    discarded_uncommitted: Bool  // ghost: 未コミット変更を実際に捨てたか(履歴)
+  }
+  init {
+    bound             = true
+    session_live      = false
+    dirty             = false
+    unpushed          = false
+    delete_requested  = false
+    reviewed_diff     = false
+    removed           = false
+    discarded_uncommitted = false
+  }
+
+  action make_dirty()      { requires bound and not dirty and not delete_requested     dirty = true }
+  action make_unpushed()   { requires bound and not unpushed and not delete_requested  unpushed = true }
+  action commit_and_push() { requires bound and (dirty or unpushed)   dirty = false  unpushed = false }
+
+  action request_delete() {
+    requires bound and not delete_requested
+    delete_requested = true
+  }
+
+  // ASSUME-3: 削除要求中は新しいセッションを開かない。
+  action start_session() {
+    requires bound and not session_live and not delete_requested
+    session_live = true
+  }
+
+  // 既存 clean ルート: risk == clean のときだけ普通に撤去する。
+  fair action remove_when_clean() {
+    requires bound and delete_requested and (not session_live) and (not dirty) and (not unpushed)
+    bound   = false
+    removed = true
+  }
+
+  // 既存 inUse ルート(v0.7.3): セッションを終了して risk を再評価する。
+  fair action end_session() {
+    requires bound and delete_requested and session_live
+    session_live = false
+  }
+
+  // 差分確認シートを開いて中身を提示する。これ自体は何も壊さない。
+  fair action review_diff() {
+    requires bound and delete_requested and dirty and not session_live
+    reviewed_diff = true
+  }
+
+  // THE NEW ROUTE: 差分を見たうえで未コミット変更を捨てて撤去する。
+  // unpushed は触らない — ブランチ ref を消すアクションはこのスペックに1つも無いので、
+  // 撤去後もコミットは残る(= 失うのは未コミットの変更だけ)。
+  fair action force_remove_after_review() {
+    requires bound and delete_requested and dirty and reviewed_diff and not session_live
+    bound   = false
+    removed = true
+    discarded_uncommitted = true
+  }
+
+  // ---- 安全性 ----
+  invariant NeverDiscardUncommittedWithoutReview { discarded_uncommitted => reviewed_diff }
+  invariant NeverRemoveWhileInUse { removed => not session_live }
+  invariant RemovedImpliesUnbound { removed => not bound }
+
+  // ---- 到達性/進行性 ----
+  reachable CleanRemovalDiscardsNothing { removed and not discarded_uncommitted }
+  // v0.7.3 では原理的に到達不能だった結末(これが今回の目的)
+  reachable DirtyWorktreeCanBeRemoved { dirty and removed }
+  // 「コミットは失われない」の witness: 未プッシュコミットを抱えた worktree が
+  // (未コミット変更を捨てて)撤去される実行が存在し、unpushed はそのまま真で残る。
+  reachable UnpushedCommitsSurviveForcedRemoval { removed and unpushed and discarded_uncommitted }
+
+  leadsTo DirtyDeletionEventuallyHappens {
+    (bound and delete_requested and dirty and not session_live) ~> removed
+  }
+
+  terminal { removed }
+}

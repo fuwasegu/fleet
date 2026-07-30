@@ -1,4 +1,8 @@
 // Fleet: カード削除時の worktree 安全削除ロジック(v0.7.3 の修正版)。
+// 後継: worktree_force_delete.fsl(v0.9.3)。invariant NeverRemoveWhileDirtyOrUnpushed は
+//   そこでは成立しない — 未追跡ゴミ1つで削除が塞がる問題への対処として、安全性を
+//   「状態」から「損失」(差分を見せずに捨てない / コミットは失わない)へ組み替えたため。
+//   このファイルは v0.7.3 時点の設計記録として残す。
 // 実装:
 //   - カードは worktree を bind できる(bound)。risk 分類は優先順位付き:
 //     inUse(生きた terminal/agent セッションがある) > dirty(未コミット変更) >
