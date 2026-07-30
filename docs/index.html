@@ -158,7 +158,7 @@
       <div class="card">
         <div class="k tag-mut">⎇ git worktree</div>
         <h3><span lang="en">A worktree per task</span><span lang="ja">タスクごとに worktree</span></h3>
-        <p><span lang="en">Create a card straight from a new git worktree — pick a repo, a base branch and a name, and Fleet runs the checkout and binds the card to it. Branch and PR stay correct, and Fleet only removes worktrees it made — never ones with uncommitted or unpushed work.</span><span lang="ja">新しい git worktree からそのままカードを作成 — リポジトリ・ベースブランチ・名前を選ぶと Fleet がチェックアウトしてカードに紐付け。ブランチ/PR は常に正しく、撤去も Fleet が作ったものだけ・未コミット/未プッシュのものは消さない。</span></p>
+        <p><span lang="en">Create a card straight from a new git worktree — pick a repo, a base branch and a name, and Fleet runs the checkout and binds the card to it. Branch and PR stay correct, and Fleet only removes worktrees it made — uncommitted work is kept unless you review the diff and force it, and the branch always survives.</span><span lang="ja">新しい git worktree からそのままカードを作成 — リポジトリ・ベースブランチ・名前を選ぶと Fleet がチェックアウトしてカードに紐付け。ブランチ/PR は常に正しく、撤去も Fleet が作ったものだけ・未コミットのものは差分を確認して強制削除したときだけ消える(ブランチは常に残る)。</span></p>
       </div>
       <div class="card">
         <div class="k tag-amber">◇ mermaid</div>
