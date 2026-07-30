@@ -26,6 +26,14 @@
 brew install --cask fuwasegu/tap/fleet
 ```
 
+Upgrading needs the tap spelled out too:
+
+```sh
+brew upgrade --cask fuwasegu/tap/fleet
+```
+
+> Without the tap, `brew upgrade --cask fleet` resolves to a different app in homebrew-cask core (JetBrains Fleet) and won't upgrade this one.
+
 Requires **macOS 26+**. Or grab `Fleet.app.zip` from [Releases](https://github.com/fuwasegu/fleet/releases/latest).
 
 ## Screenshot

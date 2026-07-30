@@ -26,6 +26,14 @@
 brew install --cask fuwasegu/tap/fleet
 ```
 
+更新も同じくタップを明示する:
+
+```sh
+brew upgrade --cask fuwasegu/tap/fleet
+```
+
+> タップ名を省いた `brew upgrade --cask fleet` は homebrew-cask 本体の別アプリ(JetBrains Fleet)に解決されるので更新されない。
+
 要件は **macOS 26+**。または [Releases](https://github.com/fuwasegu/fleet/releases/latest) から `Fleet.app.zip` を入手。
 
 ## スクリーンショット
