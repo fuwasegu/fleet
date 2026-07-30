@@ -159,4 +159,51 @@ import Foundation
         #expect(p.statusError != nil)
         #expect(p.entries.isEmpty)
     }
+
+    /// 使用中(inUse)は強制でも削除しない。走っているプロセスの cwd を消すのは
+    /// 差分を失うのとは別種の事故なので、このガードは強制ルートでも外さない。
+    @Test func inUseBlocksForceRemoval() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/inuse", baseRef: "main", baseDir: ".fleet-worktrees")
+        FileManager.default.createFile(atPath: path + "/dirty.txt", contents: Data("x".utf8))
+
+        #expect(throws: WorktreeService.GitError.self) {
+            try WorktreeService.removeForcibly(worktreePath: path, repoRoot: repo, inUse: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: path))   // 残っている
+    }
+
+    /// この機能の本命: 未追跡ゴミ + tracked 変更 + 未プッシュコミットを抱えた worktree を
+    /// 強制削除すると、ディレクトリは消えるが **ブランチとそのコミットは残る**。
+    /// これが不変条件 NeverLoseCommits(removed => branch_kept)の実行可能な証拠。
+    @Test func forceRemovalDiscardsWorkingTreeButKeepsBranchAndCommits() throws {
+        let repo = try tmpRepo()
+        defer { try? FileManager.default.removeItem(atPath: repo) }
+        let path = try WorktreeService.create(repoRoot: repo, branch: "feat/force", baseRef: "main", baseDir: ".fleet-worktrees")
+
+        // 未プッシュのコミットを1つ作る(強制削除でも失われてはいけないもの)
+        FileManager.default.createFile(atPath: path + "/kept.txt", contents: Data("keep me\n".utf8))
+        _ = try WorktreeService.run(["add", "kept.txt"], in: path)
+        _ = try WorktreeService.run(["commit", "-m", "unpushed work"], in: path)
+        let sha = try WorktreeService.run(["rev-parse", "HEAD"], in: path)
+
+        // 捨てられるべきもの: 未追跡ゴミ + tracked 変更
+        try FileManager.default.createDirectory(atPath: path + "/.serena", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: path + "/.serena/cache.json", contents: Data("{}".utf8))
+        try "hi\nthrow away\n".write(toFile: path + "/README", atomically: true, encoding: .utf8)
+
+        // dirty が unpushed より優先されることの確認(強制ルートの入口は .dirty だけ)
+        #expect(WorktreeService.removalRisk(worktreePath: path, repoRoot: repo, inUse: false) == .dirty)
+
+        try WorktreeService.removeForcibly(worktreePath: path, repoRoot: repo, inUse: false)
+
+        #expect(!FileManager.default.fileExists(atPath: path))                        // worktree は消えた
+        #expect(WorktreeService.branchExists(repoRoot: repo, branch: "feat/force"))    // ブランチは残る
+        let keptSHA = try WorktreeService.run(["rev-parse", "feat/force"], in: repo)
+        #expect(keptSHA == sha)                                                        // コミットも残る
+        // worktree の登録も掃除されている(prune 済み)
+        let list = try WorktreeService.run(["worktree", "list"], in: repo)
+        #expect(!list.contains(path))
+    }
 }

@@ -119,4 +119,27 @@ extension WorktreeService {
     public static func fileDiff(worktreePath: String, path: String) throws -> String {
         try run(["-c", "core.quotePath=false", "diff", "HEAD", "--", path], in: worktreePath)
     }
+
+    /// worktree を強制的に撤去する(`git worktree remove --force`)。
+    ///
+    /// `removeSafely` と違い dirty / unpushed を許す。この層が守るのは2点だけ:
+    ///
+    /// - **使用中(inUse)は消さない。** 走っているプロセスの cwd を消すのは、差分を失うのとは
+    ///   別種の事故。強制ルートでもこのガードは外さない。
+    /// - **ブランチ ref は消さない。** `classifyRemoval` は dirty を unpushed より優先するため
+    ///   dirty な worktree に未プッシュコミットが同居しているのは普通で、ブランチを残せば
+    ///   強制削除で失うものを「未コミットの変更だけ」に限定できる。
+    ///
+    /// 「差分を見せてから捨てる」の担保はここではなく UI 層(WorktreeForceDeleteSheet を
+    /// 通らないとこの関数に到達しない)にある。
+    ///
+    /// なお `--force` は worktree ディレクトリを丸ごと削除するので、`.gitignore` 対象の
+    /// ファイル(`.build/` など)も一緒に消える。差分一覧には出ないので UI 側で明示すること。
+    public static func removeForcibly(worktreePath: String, repoRoot: String, inUse: Bool) throws {
+        if inUse {
+            throw GitError(message: "セッションが使用中の worktree は強制削除もしません。先にセッションを終了してください。")
+        }
+        try run(["worktree", "remove", "--force", worktreePath], in: repoRoot)
+        _ = try? run(["worktree", "prune"], in: repoRoot)
+    }
 }
