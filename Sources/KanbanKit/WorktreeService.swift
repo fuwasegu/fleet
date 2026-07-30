@@ -78,8 +78,20 @@ extension WorktreeService {
     /// 実行前に新しい pgrp (pgid == 自分の pid) を作ってから対象コマンドへ exec するため、
     /// `p.processIdentifier` は git 自身の pid かつそのままプロセスグループの pgid として使える
     /// (`TerminalSessions.close` の `killpg(pid, SIGTERM)` と同じ前提)。
+    /// `run` と同じだが stdout を trim しない。
+    ///
+    /// `git status --porcelain` のように**行頭の空白が意味を持つ**出力に必ずこちらを使う
+    /// (" M path" = worktree 側の変更 / "M  path" = ステージ済み は別の状態で、trim すると
+    /// 1行目の先頭空白が落ちて分類が丸ごとずれる)。
     @discardableResult
-    static func run(_ args: [String], in dir: String, extraEnv: [String: String], timeout: TimeInterval?) throws -> String {
+    static func runRaw(_ args: [String], in dir: String) throws -> String {
+        try run(args, in: dir, extraEnv: [:], timeout: nil, trimmingOutput: false)
+    }
+
+    /// - Parameter trimmingOutput: false なら stdout をそのまま返す。行頭の空白が意味を持つ
+    ///   出力(porcelain 等)では false にする。既定 true は既存呼び出し元の挙動を維持するため。
+    @discardableResult
+    static func run(_ args: [String], in dir: String, extraEnv: [String: String], timeout: TimeInterval?, trimmingOutput: Bool = true) throws -> String {
         let argv = ["git", "-C", dir] + args
         let command = argv.map(shellQuote).joined(separator: " ")
         let p = Process()
@@ -146,7 +158,7 @@ extension WorktreeService {
             let e = String(data: errData, encoding: .utf8) ?? ""
             throw GitError(message: e.isEmpty ? o : e)
         }
-        return o.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmingOutput ? o.trimmingCharacters(in: .whitespacesAndNewlines) : o
     }
 
     /// リモート origin の HEAD から既定ブランチ名を推定。取れなければ現在の HEAD、最終 fallback は "main"。
