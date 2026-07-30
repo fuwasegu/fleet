@@ -426,6 +426,8 @@ struct CardView: View {
     /// removalRisk 確認中 / removeSafely 実行中(いずれも git 呼び出しでブロックしうるため
     /// Task.detached で走らせている間)true。ゴミ箱ボタンを無効化し二重実行を防ぐ。
     @State private var worktreeBusy = false
+    /// 差分確認 + 強制削除シートの表示。risk == .dirty の警告ダイアログからのみ立つ。
+    @State private var forceDeleting = false
 
     var body: some View {
         CardFace(
@@ -561,6 +563,14 @@ struct CardView: View {
                 if case .inUse = warningWorktreeRisk {
                     Button("セッションを終了して worktree も削除", role: .destructive, action: endSessionAndRemoveWorktree)
                 }
+                if case .dirty = warningWorktreeRisk {
+                    Button("差分を確認して強制削除…") {
+                        warningWorktreeRisk = nil
+                        // ダイアログの dismiss と同一トランザクションで sheet を出すと SwiftUI が
+                        // 片方を取り落とすことがあるため、次のメインループへ回してから提示する。
+                        Task { @MainActor in forceDeleting = true }
+                    }
+                }
                 Button("カードだけ削除(worktree はディスクに残す)", role: .destructive, action: clearWorktreeThenDeleteCard)
                 Button("ターミナルを開いて手動で処理") {
                     warningWorktreeRisk = nil
@@ -569,6 +579,17 @@ struct CardView: View {
                 Button("キャンセル", role: .cancel) { warningWorktreeRisk = nil }
             } message: {
                 Text(worktreeWarningMessage)
+            }
+            .sheet(isPresented: $forceDeleting) {
+                if let worktreePath = card.worktreePath {
+                    WorktreeForceDeleteSheet(
+                        worktreePath: worktreePath,
+                        // card.branch は検出済みの現在ブランチ。取れない場合は worktree の
+                        // ディレクトリ名(sanitizeBranch 済みのブランチ名)で代替する。
+                        branchLabel: card.branch ?? URL(fileURLWithPath: worktreePath).lastPathComponent,
+                        onConfirm: forceRemoveWorktreeThenDeleteCard
+                    )
+                }
             }
             .alert(
                 "削除できませんでした",
@@ -819,6 +840,49 @@ struct CardView: View {
                 // 倒して worktree は削除せず、対応するダイアログを再表示する(カードも削除しない)。
                 worktreeBusy = false
                 warningWorktreeRisk = risk
+            }
+        }
+    }
+
+    /// 差分確認シートで「破棄して削除」が押されたときの実行部。
+    /// `removeWorktreeThenDeleteCard` と同形だが `removeForcibly` を呼ぶ。
+    ///
+    /// 未コミット変更を捨てて良いという判断はシート側で済んでいるので、ここでは risk の
+    /// 再チェックをしない(再チェックすると dirty で必ず弾かれ、この機能が成立しない)。
+    /// `removeForcibly` が守るのは inUse ガードとブランチ保持だけ。
+    private func forceRemoveWorktreeThenDeleteCard() {
+        guard let worktreePath = card.worktreePath, let repoRoot = card.repoRoot else {
+            deleteCard()
+            return
+        }
+        guard !worktreeBusy else { return }
+        worktreeBusy = true
+        let inUse = sessions.hasSession(card.id)
+        let cardID = card.id
+        Task {
+            let outcome: Result<Void, WorktreeService.GitError> = await Task.detached(priority: .userInitiated) {
+                do {
+                    try WorktreeService.removeForcibly(worktreePath: worktreePath, repoRoot: repoRoot, inUse: inUse)
+                    return .success(())
+                } catch let e as WorktreeService.GitError {
+                    return .failure(e)
+                } catch {
+                    return .failure(WorktreeService.GitError(message: "\(error)"))
+                }
+            }.value
+            worktreeBusy = false
+            // await の間にカードが削除されていたら、これ以上 SwiftData には触れない。
+            guard BoardStore(context: context).card(withID: cardID) != nil else { return }
+            switch outcome {
+            case .success:
+                do {
+                    try BoardStore(context: context).clearWorktree(card)
+                    deleteCard()
+                } catch {
+                    worktreeDeleteError = "\(error)"
+                }
+            case .failure(let e):
+                worktreeDeleteError = e.message
             }
         }
     }
