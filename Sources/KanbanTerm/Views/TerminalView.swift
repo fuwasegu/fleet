@@ -315,9 +315,14 @@ final class TerminalSessions {
         ChannelStore.writeBinding(cardID: cardID, channel: channelID, name: cardTitle)
         let cardDir = ChannelStore.cardDir(for: cardID)
         try? FileManager.default.createDirectory(at: cardDir, withIntermediateDirectories: true)
+        // --root は必ず明示する。bridge は FLEET_ROOT を読まず、未指定だと ~/.fleet へ
+        // フォールバックするので、本体が別のルート(FLEET_ROOT)を使っているときに黙って
+        // 別のディレクトリへ書き分かれてしまう。両者が同じ root を見ることを構造で保証する。
         let config: [String: Any] = [
             "mcpServers": [
-                "fleet": ["command": helper.path, "args": ["--card", cardID.uuidString]]
+                "fleet": ["command": helper.path,
+                          "args": ["--card", cardID.uuidString,
+                                   "--root", ChannelStore.fleetRoot().path]]
             ]
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted]) else { return nil }
@@ -401,7 +406,10 @@ final class TerminalSessions {
             if let sid = codexEffectiveSession(card) { cmd += " resume \(sid)" }
             if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
                 cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
-                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
+                // --root を明示する理由は Claude 側と同じ(bridge は FLEET_ROOT を読まない)。
+                cmd += " -c " + WorktreeService.shellQuote(
+                    "mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString)), "
+                    + "\"--root\", \(tomlString(ChannelStore.fleetRoot().path))]")
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
