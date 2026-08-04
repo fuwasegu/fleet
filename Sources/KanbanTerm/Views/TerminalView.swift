@@ -387,6 +387,8 @@ final class TerminalSessions {
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
+            // カード単位のモデル指定。実測で --resume との併用も効く。
+            cmd += AgentLaunch.modelFlag(kind: .claude, model: card.model)
             if dangerSkip { cmd += " --permission-mode bypassPermissions" }
             return cmd
         case .codex:
@@ -403,6 +405,8 @@ final class TerminalSessions {
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
+            // カード単位のモデル指定。MCP 注入と同じ -c 上書き経路に乗せる。
+            cmd += AgentLaunch.modelFlag(kind: .codex, model: card.model)
             if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
             return cmd
         }

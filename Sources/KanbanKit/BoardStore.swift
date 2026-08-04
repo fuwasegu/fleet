@@ -72,7 +72,8 @@ public struct BoardStore {
                         workingDirPath: String? = nil,
                         dangerSkip: Bool = false,
                         autoStartAgent: Bool = false,
-                        agentKind: AgentKind = .claude) throws -> Card {
+                        agentKind: AgentKind = .claude,
+                        model: String? = nil) throws -> Card {
         let next = (column.cards.map(\.order).max() ?? -1) + 1
         let card = Card(title: title,
                         order: next,
@@ -81,9 +82,19 @@ public struct BoardStore {
                         dangerSkip: dangerSkip,
                         autoStartAgent: autoStartAgent,
                         agentKind: agentKind)
+        // 不正な値が来ても起動コマンドを汚染しないよう、保存前に必ず正規化する。
+        card.model = AgentLaunch.normalizedModel(model)
         context.insert(card)
         try context.save()
         return card
+    }
+
+    /// カードのモデル指定を差し替える。空/不正な値は nil(= CLI の既定モデル)に落とす。
+    /// 反映されるのは次にそのカードのターミナルを起動したときから(走っているセッションは
+    /// 起動時のモデルのまま。途中で変えたければ端末で `/model` を使う)。
+    public func setCardModel(_ card: Card, model: String?) throws {
+        card.model = AgentLaunch.normalizedModel(model)
+        try context.save()
     }
 
     public func renameCard(_ card: Card, to title: String) throws {

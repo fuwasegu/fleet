@@ -415,6 +415,7 @@ struct CardView: View {
     @State private var draft = ""
     @State private var confirmingDelete = false
     @State private var changingDir = false
+    @State private var changingModel = false
     @State private var pickingSession = false
     @State private var showingMemory = false
     @State private var hovering = false
@@ -477,6 +478,10 @@ struct CardView: View {
                 Button { changingDir = true } label: {
                     Label("作業ディレクトリを変更…", systemImage: "folder")
                 }
+                Button { changingModel = true } label: {
+                    Label(card.model.map { "モデル: \($0)" } ?? String(localized: "モデルを変更…"),
+                          systemImage: "cpu")
+                }
                 if card.agentKind == .claude {   // 履歴ピッカーは現状 Claude セッション専用
                     Button { pickingSession = true } label: {
                         Label("過去セッションから再開…", systemImage: "clock.arrow.circlepath")
@@ -516,6 +521,11 @@ struct CardView: View {
             .sheet(isPresented: $renaming) {
                 RenameCardSheet(title: $draft) { newTitle in
                     do { try BoardStore(context: context).renameCard(card, to: newTitle) } catch {}
+                }
+            }
+            .sheet(isPresented: $changingModel) {
+                CardModelSheet(agentKind: card.agentKind, current: card.model) { newModel in
+                    try? BoardStore(context: context).setCardModel(card, model: newModel)
                 }
             }
             .sheet(isPresented: $pickingSession) {
