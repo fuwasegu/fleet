@@ -513,7 +513,14 @@ final class TerminalSessions {
     /// (overlay が表示中の可能性があるため)破棄せず、hasSession の判定だけを反転させる。
     private func markSessionDead(_ cardID: UUID) { deadSessions.insert(cardID) }
 
-    /// A2A: 生きているセッションへ1行を「入力」として送り込む(末尾に改行=送信)。
+    /// A2A: 生きているセッションへテキストを「入力」として送り込む。**送信はしない。**
+    ///
+    /// 末尾に付けるのは LF(0x0a)で、これは claude / codex どちらの TUI でも「改行の挿入」で
+    /// あって送信ではない(実測: claude 2.1.220 / codex-cli 0.145.0。送信は CR = 0x0d)。
+    /// この挙動は `MonitoredTerminalView` の Shift+Enter 実装(0x0a を送り既定の CR を抑止する)
+    /// と同じ前提に立っている。届いたメッセージは入力欄に載るだけで、人がカードを開いて
+    /// Enter を押すまで走らない。
+    ///
     /// 宛先が idle(プロンプト待ち)のときだけ Hub から呼ぶこと。
     @discardableResult
     func inject(_ text: String, into cardID: UUID) -> Bool {

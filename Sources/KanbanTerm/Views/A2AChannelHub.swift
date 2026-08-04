@@ -150,7 +150,11 @@ final class A2AChannelHub {
         return ch.cards.first { $0.title.lowercased() == target && $0.id.uuidString != m.fromID }?.id
     }
 
-    /// 注入する1行。provenance を明示し、複数行は1行に畳む(改行=送信になるため)。
+    /// 注入する1行。provenance を明示する。
+    ///
+    /// 1行に畳むのは「改行=送信」だからではない(実測: LF は claude / codex どちらの TUI でも
+    /// 改行の挿入であって送信ではない。送信は CR)。畳まれるのは `sanitizeForTerminal` が
+    /// 制御文字を空白へ潰して空白を畳む結果であり、A2A の短い通知としてはそれが望ましい。
     /// body/送信者名はいずれも Agent 制御下のテキストなので、ANSI/OSC エスケープ注入や
     /// 偽装 prefix を防ぐため必ずサニタイズ・長さ制限を通す。
     private static func frame(_ m: OutboxMessage) -> String {
