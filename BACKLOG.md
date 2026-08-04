@@ -31,3 +31,51 @@
 - 基準言語=日本語(日本語文字列をローカライズキーに)、en.lproj/ja.lproj を variant group で用意。
 - Text/Button/Label/help 等は自動ローカライズ。動的 String は String(localized:) / LocalizedStringKey で対応。
 - カード名・列名はユーザーデータのため翻訳対象外(入力どおり表示)。
+
+## オーケストレーター構想 → 作ってから **やめた**（2026-07）※判断の記録
+
+「Fleet 自身が Agent を持ち、カードを束ねてオーケストレーションする」構想。
+**動くところまで作ったが採用しなかった。** ブランチ `work-orchestrator-dream` に残置。
+
+### やめた理由（これが本命）
+
+**`fleet_create_card` + `fleet_message` があれば、自然語で頼めば済む。**
+
+> 「別で 〇〇 ディレクトリからカード作って、そっちで調査させてから Fleet 経由で情報もらってね」
+
+これで通る。この能力は **v0.3.0 から既にある**。レシピ機構が足すのは決定性とゲートだけで、
+欲しかった能力自体は最初から手に入っていた。
+
+### 副因
+
+一番魅力的だったのは「**常駐カード（現行仕様エキスパートが知識を溜め、実装カードから
+質問される）**」だった。1カード内の subagent harness に原理的に真似できない部分。
+だが作ったのはステージ遷移とゲートという**配管**で、常駐カード（Phase 2）は未着手のまま。
+配管だけでは「欲しかったもの」に見えない。
+
+### 拾った知見（オーケストレーションとは無関係に有効）
+
+- **LF は送信ではない。送信は CR**（claude 2.1.220 / codex-cli 0.145.0 で実測）。
+  → 誤コメント2箇所を修正済み。bracketed paste は不要だった
+- **`card.agentState` のキャッシュを信じて Enter を送ってはいけない。**
+  ポーリング由来なので「idle を観測 → Agent が Working へ → キャッシュを信じて送信」が起き、
+  最悪は承認プロンプトに Enter が入って危険な許可が通る。`orchestration_stale.fsl` が
+  5ステップの反例を出す。**自動送信を作るなら、送信直前に同期でバッファを読み直すこと**
+- **bridge は `FLEET_ROOT` を読まない。** アプリが `--root` を渡していなかった（修正済み）
+- 注入テキストから **CR は必ず落とす**（混ざると途中で勝手に送信される）
+- `claude --resume <id> --model X` は resume でもモデル指定が効く（実測）
+
+### 取り出したもの（main へ）
+
+- カード単位のモデル指定（`AgentLaunch` / `Card.model`）
+- 本体と bridge の fleet root 不一致の修正 + `FLEET_ROOT` による隔離
+- 上記の誤コメント修正
+
+### もし再訪するなら
+
+配管からではなく **常駐カードから**作る。レシピもステージ遷移も要らない。
+「知識を溜めて質問に答える長命カード」だけを、既存の `fleet_message` の上に立てる。
+それが刺さらなければ構想全体が刺さらない。
+
+参考: 設計 `docs/superpowers/specs/2026-07-28-fleet-orchestration-design.md`（ブランチ側）、
+FSL `orchestration.fsl`（safety proved / liveness verified）、`orchestration_stale.fsl`（反例）。
