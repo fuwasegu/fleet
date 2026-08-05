@@ -315,9 +315,14 @@ final class TerminalSessions {
         ChannelStore.writeBinding(cardID: cardID, channel: channelID, name: cardTitle)
         let cardDir = ChannelStore.cardDir(for: cardID)
         try? FileManager.default.createDirectory(at: cardDir, withIntermediateDirectories: true)
+        // --root は必ず明示する。bridge は FLEET_ROOT を読まず、未指定だと ~/.fleet へ
+        // フォールバックするので、本体が別のルート(FLEET_ROOT)を使っているときに黙って
+        // 別のディレクトリへ書き分かれてしまう。両者が同じ root を見ることを構造で保証する。
         let config: [String: Any] = [
             "mcpServers": [
-                "fleet": ["command": helper.path, "args": ["--card", cardID.uuidString]]
+                "fleet": ["command": helper.path,
+                          "args": ["--card", cardID.uuidString,
+                                   "--root", ChannelStore.fleetRoot().path]]
             ]
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted]) else { return nil }
@@ -387,6 +392,8 @@ final class TerminalSessions {
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
+            // カード単位のモデル指定。実測で --resume との併用も効く。
+            cmd += AgentLaunch.modelFlag(kind: .claude, model: card.model)
             if dangerSkip { cmd += " --permission-mode bypassPermissions" }
             return cmd
         case .codex:
@@ -399,10 +406,15 @@ final class TerminalSessions {
             if let sid = codexEffectiveSession(card) { cmd += " resume \(sid)" }
             if let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") {
                 cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.command=\(tomlString(helper.path))")
-                cmd += " -c " + WorktreeService.shellQuote("mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString))]")
+                // --root を明示する理由は Claude 側と同じ(bridge は FLEET_ROOT を読まない)。
+                cmd += " -c " + WorktreeService.shellQuote(
+                    "mcp_servers.fleet.args=[\"--card\", \(tomlString(cardID.uuidString)), "
+                    + "\"--root\", \(tomlString(ChannelStore.fleetRoot().path))]")
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
+            // カード単位のモデル指定。MCP 注入と同じ -c 上書き経路に乗せる。
+            cmd += AgentLaunch.modelFlag(kind: .codex, model: card.model)
             if dangerSkip { cmd += " --dangerously-bypass-approvals-and-sandbox" }
             return cmd
         }
@@ -501,7 +513,14 @@ final class TerminalSessions {
     /// (overlay が表示中の可能性があるため)破棄せず、hasSession の判定だけを反転させる。
     private func markSessionDead(_ cardID: UUID) { deadSessions.insert(cardID) }
 
-    /// A2A: 生きているセッションへ1行を「入力」として送り込む(末尾に改行=送信)。
+    /// A2A: 生きているセッションへテキストを「入力」として送り込む。**送信はしない。**
+    ///
+    /// 末尾に付けるのは LF(0x0a)で、これは claude / codex どちらの TUI でも「改行の挿入」で
+    /// あって送信ではない(実測: claude 2.1.220 / codex-cli 0.145.0。送信は CR = 0x0d)。
+    /// この挙動は `MonitoredTerminalView` の Shift+Enter 実装(0x0a を送り既定の CR を抑止する)
+    /// と同じ前提に立っている。届いたメッセージは入力欄に載るだけで、人がカードを開いて
+    /// Enter を押すまで走らない。
+    ///
     /// 宛先が idle(プロンプト待ち)のときだけ Hub から呼ぶこと。
     @discardableResult
     func inject(_ text: String, into cardID: UUID) -> Bool {

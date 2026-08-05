@@ -39,13 +39,15 @@ struct ColumnView: View {
             // worktree ありのカード作成(git 呼び出しの非同期化・スピナー表示)はシート自身が
             // store/column を使って行う。ここで渡す onCreate は worktree を伴わない
             // (フォルダ紐づけ or 何もなし)、同期・即座に完了するケースのみを扱う。
-            NewCardSheet(store: store, column: column) { title, dir, autoStart, danger, kind, profileID in
+            NewCardSheet(store: store, column: column) { spec in
                 let card = try store.addCard(
-                    title: title, to: column,
-                    workingDirPath: dir, dangerSkip: danger, autoStartAgent: autoStart,
-                    agentKind: kind
+                    title: spec.title, to: column,
+                    workingDirPath: spec.workingDirPath,
+                    dangerSkip: spec.dangerSkip, autoStartAgent: spec.autoStartAgent,
+                    agentKind: spec.agentKind, model: spec.model
                 )
-                if let profileID, let profile = try store.profiles().first(where: { $0.id == profileID }) {
+                if let profileID = spec.claudeProfileID,
+                   let profile = try store.profiles().first(where: { $0.id == profileID }) {
                     try store.setCardProfile(card, profile: profile)
                 }
             }

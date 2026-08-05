@@ -97,3 +97,14 @@
 "完了 (DONE) を知らせる" = "Tell me when done";
 "承認待ち (BLOCKED) を知らせる" = "Tell me when waiting for approval";
 "そのカードのターミナルを開いていないときだけ、Dock アイコンを跳ねさせて音を鳴らします。どのカードかは上部の「要対応」から。" = "Bounces the Dock icon and plays a sound — only while you are not looking at that card’s terminal. Which card it was is in “Needs attention” at the top.";
+
+/* Phase 0.5: per-card model selection */
+"モデル (任意)" = "Model (optional)";
+"モデルを変更…" = "Change Model…";
+"モデルを変更" = "Change model";
+"モデル名に使えない文字が含まれています (英数字と . _ - [ ] のみ)" = "That model name contains unsupported characters (only letters, digits and . _ - [ ] are allowed).";
+"エイリアスでも完全な ID でも指定できます。" = "An alias or a full model ID both work.";
+"空欄 = 既定 (例: opus / sonnet / claude-opus-5)" = "Blank = default (e.g. opus / sonnet / claude-opus-5)";
+"空欄 = 既定 (例: gpt-5-codex)" = "Blank = default (e.g. gpt-5-codex)";
+"空欄にすると CLI の既定モデルに戻ります。" = "Leave it blank to go back to the CLI's default model.";
+"反映は次にこのカードのターミナルを起動したときからです。走っているセッションは起動時のモデルのままです。" = "This takes effect the next time you start this card's terminal. A session that is already running keeps the model it started with.";

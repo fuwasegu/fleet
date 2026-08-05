@@ -111,6 +111,9 @@ public final class Card {
     public var repoRoot: String? = nil          // Fleet 管理 worktree の元リポジトリ root
     public var worktreePath: String? = nil      // このカードに紐づく worktree の絶対パス
     public var isFleetOwnedWorktree: Bool = false  // worktree の作成/撤去を Fleet が管理してよいか
+    /// このカードで使うモデル。nil = CLI の既定モデル(既存カードは全部これ)。
+    /// 自由入力(`opus` / `claude-opus-5` / `gpt-5-codex` …)。検証は `AgentLaunch.normalizedModel`。
+    public var model: String? = nil
 
     public init(id: UUID = UUID(),
                 title: String,

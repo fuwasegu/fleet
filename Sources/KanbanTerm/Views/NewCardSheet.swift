@@ -2,6 +2,20 @@ import SwiftUI
 import UniformTypeIdentifiers
 import KanbanKit
 
+/// 新規カードの指定内容。`NewCardSheet` が集めて呼び出し側へ渡す。
+/// 位置引数を並べるとどれがどれか分からなくなるので、増える一方のこの一式は struct にまとめる。
+struct NewCardSpec {
+    var title: String
+    var workingDirPath: String?
+    var autoStartAgent: Bool
+    var dangerSkip: Bool
+    var agentKind: AgentKind
+    /// Claude Code 選択時にピッカーで選んだ `ClaudeProfile.id`(既定=nil = `~/.claude`)。
+    var claudeProfileID: UUID?
+    /// 使うモデル(自由入力)。nil = CLI の既定モデル。
+    var model: String?
+}
+
 /// カード新規作成ショートカット: 作業ディレクトリをGUIで選び、Agent種別/自動起動/危険モードを選ぶ。
 /// フォルダ選択は1つだけで、「Git worktree を作成」トグルは選んだフォルダが git リポジトリの
 /// 場合にのみ有効になるオプションとして重ねる(排他的なタブではない)。トグルON時は
@@ -16,18 +30,19 @@ struct NewCardSheet: View {
     let store: BoardStore
     let column: BoardColumn
 
-    /// (title, workingDirPath?, autoStartAgent, dangerSkip, agentKind, claudeProfileID?)
     /// worktree を伴わない(フォルダ紐づけ or 何もなし)カード作成。同期・即座に完了するため
     /// スピナーは出さない。カード作成が失敗した場合は throw する。呼び出し側はエラーを
-    /// シートの `wtError` に反映させ、シートを閉じない。claudeProfileID は Claude Code 選択時に
-    /// ピッカーで選んだ `ClaudeProfile.id`(既定=nil)。
-    let onCreate: (String, String?, Bool, Bool, AgentKind, UUID?) throws -> Void
+    /// シートの `wtError` に反映させ、シートを閉じない。
+    let onCreate: (NewCardSpec) throws -> Void
 
     @State private var title = ""
     @State private var directory: String?
     @State private var picking = false
     @State private var danger = false
     @State private var kind: AgentKind = .claude
+    /// 使うモデル(自由入力)。空 = CLI の既定モデル。
+    /// 固定の選択肢を持たないのは、新モデルが出るたびに Fleet を更新しないと使えなくなるため。
+    @State private var model = ""
 
     @State private var repoCurrentBranch: String?
     @State private var branchList: [String] = []
@@ -77,6 +92,7 @@ struct NewCardSheet: View {
 
     private var canCreate: Bool {
         guard !resolvedTitle.isEmpty else { return false }
+        guard isModelValid else { return false }
         if makeWorktree {
             return directory != nil && isGitRepo && !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -117,6 +133,8 @@ struct NewCardSheet: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
+
+            modelField
 
             if kind == .claude {
                 claudeProfileFields
@@ -211,6 +229,38 @@ struct NewCardSheet: View {
         }
     }
 
+    /// モデル指定。選択肢ではなく自由入力にしている(理由は `model` の宣言コメント)。
+    /// 妥当でない入力はその場で赤字にし、作成ボタンも無効化する
+    /// (黙って既定モデルに落とすと、指定したつもりで別モデルが走る事故になる)。
+    private var modelField: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("モデル (任意)").font(.caption).foregroundStyle(.secondary)
+            TextField(modelPlaceholder, text: $model)
+                .textFieldStyle(.roundedBorder)
+            if !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !isModelValid {
+                Text("モデル名に使えない文字が含まれています (英数字と . _ - [ ] のみ)")
+                    .font(.caption).foregroundStyle(.red)
+            } else {
+                Text(modelHint).font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var modelPlaceholder: String {
+        kind == .claude ? "空欄 = 既定 (例: opus / sonnet / claude-opus-5)"
+                        : "空欄 = 既定 (例: gpt-5-codex)"
+    }
+
+    private var modelHint: String {
+        String(localized: "エイリアスでも完全な ID でも指定できます。")
+    }
+
+    /// 空欄は「指定なし」なので妥当。入力があるときだけ文字集合を検査する。
+    private var isModelValid: Bool {
+        let t = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty || AgentLaunch.isValidModelName(t)
+    }
+
     private var claudeProfileFields: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -300,8 +350,15 @@ struct NewCardSheet: View {
             createWithWorktree(repoRoot: dir, branch: branchName, baseRef: baseBranch)
         } else {
             do {
-                try onCreate(resolvedTitle, directory, true, danger, kind,
-                              kind == .claude ? selectedProfileID : nil)
+                try onCreate(NewCardSpec(
+                    title: resolvedTitle,
+                    workingDirPath: directory,
+                    autoStartAgent: true,
+                    dangerSkip: danger,
+                    agentKind: kind,
+                    claudeProfileID: kind == .claude ? selectedProfileID : nil,
+                    model: AgentLaunch.normalizedModel(model)
+                ))
                 dismiss()
             } catch let error as WorktreeService.GitError {
                 wtError = error.message
@@ -329,6 +386,7 @@ struct NewCardSheet: View {
         let agentKind = kind
         let profileID = agentKind == .claude ? selectedProfileID : nil
         let fetch = refreshBase
+        let modelName = AgentLaunch.normalizedModel(model)
         Task {
             do {
                 let resolved = await Task.detached(priority: .userInitiated) {
@@ -349,7 +407,7 @@ struct NewCardSheet: View {
                 let card = try store.addCard(
                     title: title, to: column,
                     workingDirPath: nil, dangerSkip: dangerSkip, autoStartAgent: true,
-                    agentKind: agentKind
+                    agentKind: agentKind, model: modelName
                 )
                 try store.setWorktree(
                     card, repoRoot: repoRoot, worktreePath: path,
