@@ -65,6 +65,7 @@ let maxRefsCount = 20              // refs 配列の要素数上限(SECURITY ite
 let maxRefLength = 200             // refs 各要素の文字数上限
 let maxCardTitleLength = 200       // fleet_create_card の title 上限(M1: 無制限な Agent 入力の防止)
 let maxMemoryKindLength = 32       // fleet_remember の kind 上限(M1)
+let maxModelLength = 128           // fleet_create_card の model 上限
 let maxPeerNameLength = 100        // fleet_message/fleet_handoff の to(宛先ピア名)上限(M1)
 
 // MARK: - I/O
@@ -214,6 +215,21 @@ func writeStatus(_ channelDir: URL, task: String) {
 
 // MARK: - 盤面操作 intent(board-intents.jsonl)+ スナップショット(board.json)
 
+/// 無所属カードからの盤面操作 intent を `delegations/<intentID>.json` へ書く。
+///
+/// チャンネル所属カードは channels/<id>/board-intents.jsonl に追記するが、**まだどのカードとも
+/// つながっていないカードにはそのディレクトリが無い**。以前はそのせいで1枚目のカードが
+/// fleet_create_card すら呼べず、「最初の委譲」が原理的にできなかった。
+///
+/// 追記ではなく **1 intent = 1ファイル** にするのは、Fleet 本体がディレクトリ監視で拾うため。
+/// 監視イベントは「直下の項目が増減したとき」にしか来ないので、既存ファイルへの追記だと
+/// 発火せず永久に拾われない(実機で踏んだ)。
+func writeDelegation(_ intentID: String, _ data: Data) {
+    let dir = fleetRoot.appendingPathComponent("delegations", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try? data.write(to: dir.appendingPathComponent("\(intentID).json"), options: .atomic)
+}
+
 func appendBoardIntent(_ entry: [String: Any]) {
     var e = entry
     e["id"] = UUID().uuidString
@@ -222,6 +238,11 @@ func appendBoardIntent(_ entry: [String: Any]) {
     guard let d = try? JSONSerialization.data(withJSONObject: e),
           let s = String(data: d, encoding: .utf8) else { return }
     let line = Data((s + "\n").utf8)
+    // 無所属なら委譲キューへ回す(チャンネル dir が無いので書けない)。
+    guard currentChannelDir() != nil else {
+        writeDelegation(e["id"] as? String ?? UUID().uuidString, d)
+        return
+    }
     withResolvedChannelLocked { channelDir in
         let url = channelDir.appendingPathComponent("board-intents.jsonl")
         let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
@@ -385,13 +406,15 @@ let toolDefs: [[String: Any]] = [
     ],
     [
         "name": "fleet_create_card",
-        "description": "Create a new card (a subtask) on the Fleet board. The new card automatically joins your channel, so it shares this context and a peer (or you) can pick it up. Use it to decompose work and delegate. Optionally place it in a named column and give it a working directory.",
+        "description": "Create a new card (a subtask) on the Fleet board and delegate to it. The new card joins a shared channel with you, so you can then reach it with fleet_message and read what it recorded with fleet_recall. This works even if you are not connected to anything yet — creating the card is what puts the two of you in a channel. Give it its own working directory to have it investigate another repo, and pick `agent`/`model` to delegate to a different CLI or a different model than your own (e.g. a Codex card to review your work).",
         "inputSchema": [
             "type": "object",
             "properties": [
                 "title": ["type": "string", "description": "The card/subtask title."],
                 "column": ["type": "string", "description": "Optional column name (defaults to the first column)."],
-                "dir": ["type": "string", "description": "Optional working directory for the card's terminal."]
+                "dir": ["type": "string", "description": "Optional working directory for the card's terminal — use it to point the new card at another repo."],
+                "agent": ["type": "string", "enum": ["claude", "codex"], "description": "Which CLI runs in the new card. Defaults to claude."],
+                "model": ["type": "string", "description": "Optional model for the new card, e.g. \"opus\", \"sonnet\", \"gpt-5-codex\". Defaults to that CLI's default."]
             ],
             "required": ["title"]
         ]
@@ -427,12 +450,74 @@ let toolDefs: [[String: Any]] = [
     ]
 ]
 
+/// fleet_create_card の本体。**チャンネル無しでも呼べる**唯一のツールなので、
+/// handleToolCall のチャンネルガードより手前で処理する(この分岐は channelDir を使わない)。
+func handleCreateCard(_ id: Any, _ arguments: [String: Any]) {
+    guard let rawTitle = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTitle.isEmpty else {
+        sendResult(id, textContent("title is required", isError: true)); return
+    }
+    // title も Agent が渡す任意の文字列(SECURITY: 無制限だと board-intents.jsonl / 盤面に
+    // 肥大したタイトルを書ける, M1)。
+    let title = String(rawTitle.prefix(maxCardTitleLength))
+    var intent: [String: Any] = ["kind": "create_card", "title": title]
+    if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
+    if let dir = arguments["dir"] as? String, !dir.isEmpty {
+        // dir は Agent が渡す任意の文字列。許可リストは正当な用途を壊すので作らないが、
+        // 形状(絶対パス)と実在(既存ディレクトリ)くらいは検証する(SECURITY item 3) —
+        // でなければ ~/.ssh のような無関係な既存パスをそのまま新カードの作業ディレクトリに
+        // 仕込める。より厳密なポリシー(プロジェクトルート配下への制限)は follow-up。
+        var isDirectory: ObjCBool = false
+        guard dir.hasPrefix("/"),
+              FileManager.default.fileExists(atPath: dir, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            sendResult(id, textContent("dir must be an absolute path to an existing directory.", isError: true))
+            return
+        }
+        intent["dir"] = dir
+    }
+    // agent は claude / codex のみ。未知の値は既定(claude)に落とす — Agent の綴り間違いで
+    // カード作成そのものを失敗させるより、既定で作って動かすほうが親切。
+    if let agent = (arguments["agent"] as? String)?.lowercased(),
+       ["claude", "codex"].contains(agent) {
+        intent["agent"] = agent
+    }
+    // model は最終的に起動コマンド文字列へ入る。権威ある検証は KanbanKit の
+    // AgentLaunch.normalizedModel だが(bridge は KanbanKit にリンクできない)、ここで黙って
+    // 落とすと Agent は「指定したつもりで既定モデルが走る」ことに気づけない。同じ文字集合で
+    // 検査して**エラーを返す**。許可文字を変えるときは AgentLaunch 側と合わせること。
+    if let raw = arguments["model"] as? String {
+        let model = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty {
+            let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-[]")
+            guard model.count <= maxModelLength, model.allSatisfy({ allowed.contains($0) }) else {
+                sendResult(id, textContent(
+                    "model may only contain letters, digits and . _ - [ ] (no spaces), max \(maxModelLength) characters. Got: \(model.prefix(40))",
+                    isError: true))
+                return
+            }
+            intent["model"] = model
+        }
+    }
+    appendBoardIntent(intent)
+    sendResult(id, textContent("""
+    Requested new card "\(title)". It will appear on the board shortly and share a channel with you \
+    (check fleet_board). Once it is there you can push work to it with fleet_message, and read what \
+    it records with fleet_recall.
+    """))
+}
+
 func handleToolCall(_ id: Any, _ params: [String: Any]?) {
     let name = params?["name"] as? String ?? ""
     let arguments = params?["arguments"] as? [String: Any] ?? [:]
 
+    // fleet_create_card だけはチャンネル無しでも通す。**これが「最初の委譲」の入口**で、
+    // ここを塞ぐと「カードを作るにはチャンネルが必要 / チャンネルを作るにはカードを2枚
+    // 手で結線」という鶏と卵になり、1枚目のカードは何も委譲できなかった。
+    // 作成された新カードは Fleet 本体が作成元と結線するので、以降は通常の A2A と同じ。
+    if name == "fleet_create_card" { handleCreateCard(id, arguments); return }
+
     guard let channelDir = currentChannelDir() else {
-        sendResult(id, textContent("You are not currently in a shared channel. Connect this card to another on the Fleet board to share context.", isError: true))
+        sendResult(id, textContent("You are not currently in a shared channel. Connect this card to another on the Fleet board to share context — or use fleet_create_card, which works from an unconnected card and puts the new card in a channel with you.", isError: true))
         return
     }
 
@@ -598,32 +683,6 @@ func handleToolCall(_ id: Any, _ params: [String: Any]?) {
             }.joined(separator: "\n")
         }
         sendResult(id, textContent(out))
-
-    case "fleet_create_card":
-        guard let rawTitle = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawTitle.isEmpty else {
-            sendResult(id, textContent("title is required", isError: true)); return
-        }
-        // title も Agent が渡す任意の文字列(SECURITY: 無制限だと board-intents.jsonl / 盤面に
-        // 肥大したタイトルを書ける, M1)。
-        let title = String(rawTitle.prefix(maxCardTitleLength))
-        var intent: [String: Any] = ["kind": "create_card", "title": title]
-        if let col = arguments["column"] as? String, !col.isEmpty { intent["column"] = col }
-        if let dir = arguments["dir"] as? String, !dir.isEmpty {
-            // dir は Agent が渡す任意の文字列。許可リストは正当な用途を壊すので作らないが、
-            // 形状(絶対パス)と実在(既存ディレクトリ)くらいは検証する(SECURITY item 3) —
-            // でなければ ~/.ssh のような無関係な既存パスをそのまま新カードの作業ディレクトリに
-            // 仕込める。より厳密なポリシー(プロジェクトルート配下への制限)は follow-up。
-            var isDirectory: ObjCBool = false
-            guard dir.hasPrefix("/"),
-                  FileManager.default.fileExists(atPath: dir, isDirectory: &isDirectory),
-                  isDirectory.boolValue else {
-                sendResult(id, textContent("dir must be an absolute path to an existing directory.", isError: true))
-                return
-            }
-            intent["dir"] = dir
-        }
-        appendBoardIntent(intent)
-        sendResult(id, textContent("Requested new card \"\(title)\". It will appear on the board and join this channel shortly (check fleet_board)."))
 
     case "fleet_move_card":
         guard let card = (arguments["card"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !card.isEmpty,

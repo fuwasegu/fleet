@@ -230,7 +230,11 @@ final class TerminalSessions {
               uiState: BoardUIState) -> LocalProcessTerminalView {
         if let existing = views[cardID] { return existing }
         deadSessions.remove(cardID)   // 新規セッションを張るので「死亡」マークを解除
-        let term = MonitoredTerminalView(frame: .zero)
+        // **frame は必ず非ゼロで作る。** SwiftUI に載せる場合はレイアウトで上書きされるが、
+        // 裏で起動する(ウィンドウに載せない)場合は誰もサイズを与えないため、.zero のままだと
+        // PTY の winsize が 0x0 になり TUI が描画できず、AgentDetection もバッファ行を
+        // 読めない。おおよそ 100x35 相当の妥当な初期サイズを与えておく。
+        let term = MonitoredTerminalView(frame: Self.defaultTerminalFrame)
         term.font = TerminalSettings.resolvedFont()   // 設定フォントを適用
         Self.applyTheme(TerminalSettings.resolvedTheme(), to: term)
 
@@ -507,6 +511,10 @@ final class TerminalSessions {
 
     /// このカードのターミナルセッションが既に生きているか。シェルが自然終了した(死亡マーク
     /// 済み)ものは、view 自体はまだ overlay 表示用に残っていても「使用中」とはみなさない。
+    /// ウィンドウに載せずに起動するときの初期サイズ(約 100x35 相当)。
+    /// SwiftUI 経由ではレイアウトが上書きするので、実質「裏起動用の既定値」。
+    static let defaultTerminalFrame = CGRect(x: 0, y: 0, width: 960, height: 600)
+
     func hasSession(_ cardID: UUID) -> Bool { views[cardID] != nil && !deadSessions.contains(cardID) }
 
     /// `AgentStateMonitor.processTerminated` から呼ばれる。SwiftTerm の view/monitor は

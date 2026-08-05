@@ -158,6 +158,11 @@ public struct BoardStore {
         for ch in (try? channels()) ?? [] { syncChannel(ch) }
     }
 
+    /// 盤面の全カード。列を跨いで探すときに使う。
+    public func cards() throws -> [Card] {
+        try context.fetch(FetchDescriptor<Card>())
+    }
+
     public func card(withID id: UUID) -> Card? {
         let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
         return try? context.fetch(descriptor).first
@@ -315,9 +320,12 @@ public struct BoardStore {
     /// Agent の盤面操作 intent(board-intents.jsonl)を適用する。
     /// create_card / move_card のみ(破壊操作なし)。move はチャンネル所属カードに限定。
     /// 適用済み id は記録し、成否に関わらず再適用しない(リトライ暴走防止)。
-    public func applyBoardIntents(for channelID: UUID) {
+    /// 戻り値は**このパスで新しく作られたカード**(裏起動の対象)。理由は `applyCardIntents` と同じ。
+    @discardableResult
+    public func applyBoardIntents(for channelID: UUID) -> [Card] {
+        var created: [Card] = []
         let intents = ChannelStore.boardIntents(for: channelID)
-        guard !intents.isEmpty else { return }
+        guard !intents.isEmpty else { return created }
         var applied = ChannelStore.appliedIntentIDs(for: channelID)
         var didApply = false
         for intent in intents where !applied.contains(intent.id) {
@@ -326,13 +334,10 @@ public struct BoardStore {
             let cols = (try? columns()) ?? []
             switch intent.kind {
             case "create_card":
-                guard let title = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { break }
-                guard let col = cols.first(where: { $0.name == intent.column }) ?? cols.first else { break }
-                let dir = (intent.dir?.isEmpty == false) ? intent.dir : nil
-                if let card = try? addCard(title: title, to: col, workingDirPath: dir) {
-                    // 作成元と同じチャンネルへ参加させて文脈を共有(委譲の要)。
-                    let anchor = ch.cards.first { $0.id.uuidString == intent.fromID } ?? ch.cards.first
-                    if let anchor { try? connectCards(card, anchor) }
+                // 作成元と同じチャンネルへ参加させて文脈を共有(委譲の要)。
+                let anchor = ch.cards.first { $0.id.uuidString == intent.fromID } ?? ch.cards.first
+                if let made = createCard(from: intent, columns: cols, connectTo: anchor) {
+                    created.append(made)
                 }
             case "move_card":
                 guard let ref = intent.card, let colName = intent.column,
@@ -344,6 +349,68 @@ public struct BoardStore {
             }
         }
         if didApply { ChannelStore.writeAppliedIntentIDs(applied, for: channelID) }
+        return created
+    }
+
+    /// `create_card` intent からカードを1枚作る。チャンネル経由とカード経由の**唯一の実装**。
+    /// 片方だけ挙動が変わると「無所属から作ったカードだけ agent が効かない」といった
+    /// ズレを生むので、必ずここを通す。
+    @discardableResult
+    func createCard(from intent: BoardIntent, columns cols: [BoardColumn],
+                    connectTo anchor: Card?) -> Card? {
+        guard let title = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        guard let col = cols.first(where: { $0.name == intent.column }) ?? cols.first else { return nil }
+        // dir は **ここでも** 検証する。bridge の JSON-RPC 経路にしか検証が無いと、Agent が
+        // intent ファイルを直接書いて bridge を迂回でき、任意の既存ディレクトリで新しい Agent を
+        // 起動させられる(~/.ssh 等)。外側だけで守るのは多層防御になっていない。
+        let dir = Self.validatedWorkingDir(intent.dir)
+        // agent は Agent が渡す任意の文字列。未知の値は既定(claude)に落とす。
+        let kind = AgentKind(rawValue: (intent.agent ?? "").lowercased()) ?? .claude
+        guard let card = try? addCard(title: title, to: col, workingDirPath: dir,
+                                     agentKind: kind, model: intent.model) else { return nil }
+        // 結線まで成功しなければ**カードを取り消す**。作成元とつながっていないカードを
+        // 「委譲できた」と返すと、送り手は fleet_message で届かない相手に投げ続ける。
+        if let anchor, anchor.id != card.id {
+            do { _ = try connectCards(card, anchor) }
+            catch {
+                NSLog("[Fleet] 委譲に失敗(結線できず、作ったカードを取り消します): \(error)")
+                try? deleteCard(card)
+                return nil
+            }
+        }
+        return card
+    }
+
+    /// intent 由来の作業ディレクトリを検証する。絶対パスで実在するディレクトリ以外は捨てる
+    /// (nil = カードは作るが cwd を持たない)。bridge 側と同じ方針を本体側にも置く。
+    static func validatedWorkingDir(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        guard raw.hasPrefix("/") else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: raw, isDirectory: &isDir), isDir.boolValue else { return nil }
+        return raw
+    }
+
+    /// 委譲 intent(まだどのカードともつながっていないカードからの `fleet_create_card`)を適用する。
+    /// 適用時に作成元と結線するので、**ここでチャンネルが生まれる**。
+    ///
+    /// 戻り値は**このパスで新しく作られたカード**。呼び出し側はこれだけを裏で起動する
+    /// (全カードを裏起動するとトークンを勝手に焼くので、「人が意図した委譲の結果」に限る)。
+    @discardableResult
+    public func applyDelegations() -> [Card] {
+        var created: [Card] = []
+        let cols = (try? columns()) ?? []
+        for (url, intent) in ChannelStore.claimDelegations() {
+            // claim 済みなので、成否に関わらず取り除く(リトライ暴走防止。チャンネル側と同じ方針)。
+            defer { ChannelStore.removeDelegation(at: url) }
+            guard intent.kind == "create_card" else { continue }
+            // 作成元カードが盤面から消えていたら何もしない(孤児カードを作らない)。
+            guard let fromID = UUID(uuidString: intent.fromID), let creator = card(withID: fromID) else { continue }
+            if let made = createCard(from: intent, columns: cols, connectTo: creator) {
+                created.append(made)
+            }
+        }
+        return created
     }
 
     /// Agent の worktree 作成 intent(worktree-intents.jsonl)を適用する(同期版)。
