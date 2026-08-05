@@ -61,7 +61,18 @@ final class A2AChannelHub {
         delegationDebounce = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let self, let context = self.context else { return }
-            BoardStore(context: context).applyDelegations()
+            self.startDelegatedCards(BoardStore(context: context).applyDelegations())
+        }
+    }
+
+    /// 委譲で生えたカードのセッションを人がターミナルを開かなくても起動する。
+    /// 対象は**この適用で新しく作られたカードだけ**(全カードを裏起動するとトークンを焼く)。
+    private func startDelegatedCards(_ created: [Card]) {
+        guard !created.isEmpty, let context, let uiState, let sessions else { return }
+        for card in created {
+            sessions.startInBackground(cardID: card.id, directory: card.effectiveCwd,
+                                       dangerSkip: card.dangerSkip,
+                                       context: context, uiState: uiState)
         }
     }
 
@@ -74,7 +85,9 @@ final class A2AChannelHub {
         if abandoned > 0 {
             NSLog("[Fleet] 前回処理途中だった委譲 \(abandoned) 件を \(ChannelStore.brokenDelegationDir().path) へ退避しました")
         }
-        if let context { BoardStore(context: context).applyDelegations() }
+        // Fleet を閉じている間に届いた委譲も、動作中に届いたときと同じ扱いにする(裏起動する)。
+        // 新規作成されたカードだけが対象なので、起動ごとに既存カードが焼かれることはない。
+        if let context { startDelegatedCards(BoardStore(context: context).applyDelegations()) }
         // C1 緩和: binding.json の自己改竄をここ(起動時/接続/解除。ファイル監視イベント毎では
         // ない=コスト低)で真実へ強制的に戻す。件数はカード数程度なので毎回呼んでも安価。
         if let context { BoardStore(context: context).reconcileBindings() }

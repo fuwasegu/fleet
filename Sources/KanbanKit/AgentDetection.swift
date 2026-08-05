@@ -13,6 +13,10 @@ public enum AgentDetection {
         case oscTitle              // OSC 0/2 のタイトル文字列
         case whole                 // 与えられた下部行の全体
         case bottom(Int)           // 末尾の非空行 N 本
+        /// 可視画面**全体**(下部行の窓より広い)。起動直後は出力が短く画面がまだスクロール
+        /// していないため、全画面ダイアログは下部ではなく**上部**に描かれる。下部窓しか見て
+        /// いないと取りこぼすので、そういうルールだけこの領域を使う。
+        case screen
     }
 
     /// マッチ条件。contains 系は大文字小文字を無視。regex/lineRegex は原文に対して評価。
@@ -69,10 +73,12 @@ public enum AgentDetection {
     }
 
     /// 判定。マッチ無し or skip ルールがマッチ → nil(＝状態維持)。
-    public static func classify(kind: AgentKind, title: String, lines: [String]) -> AgentState? {
+    /// `lines` は端末下部の窓、`screen` は可視画面全体(省略時は `lines` と同じ)。
+    public static func classify(kind: AgentKind, title: String, lines: [String],
+                                screen: [String]? = nil) -> AgentState? {
         let rules = (kind == .codex ? codexRules : claudeRules).sorted { $0.priority > $1.priority }
         for rule in rules {
-            let (text, rlines) = content(rule.region, title: title, lines: lines)
+            let (text, rlines) = content(rule.region, title: title, lines: lines, screen: screen ?? lines)
             if rule.match.matches(text: text, lines: rlines) {
                 return rule.skip ? nil : rule.state
             }
@@ -80,16 +86,43 @@ public enum AgentDetection {
         return nil
     }
 
-    private static func content(_ r: Region, title: String, lines: [String]) -> (String, [String]) {
+    private static func content(_ r: Region, title: String, lines: [String],
+                                screen: [String]) -> (String, [String]) {
         switch r {
         case .oscTitle:
-            return (title, [title])
+            let t = normalize(title)
+            return (t, [t])
         case .whole:
-            return (lines.joined(separator: "\n"), lines)
+            let ls = lines.map(normalize)
+            return (ls.joined(separator: "\n"), ls)
+        case .screen:
+            let ls = screen.map(normalize)
+            return (ls.joined(separator: "\n"), ls)
         case .bottom(let n):
-            let nonEmpty = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.suffix(n)
+            let nonEmpty = lines.map(normalize).filter { !$0.isEmpty }.suffix(n)
             return (nonEmpty.joined(separator: "\n"), Array(nonEmpty))
         }
+    }
+
+    /// 端末バッファの行をパターン照合できる形に正す。
+    ///
+    /// 実測(dev ビルドでの計測): claude の起動直後のダイアログは語間が **空白(0x20)ではなく
+    /// 制御文字**で埋まっていて `Accessing·workspace:` のように見える(SwiftTerm が書き込まれて
+    /// いないセルをそう返す)。素の `contains("accessing workspace")` は原理的に当たらないので、
+    /// 制御文字と NBSP を空白に倒し、連続空白を 1 個に畳んでから照合する。
+    public static func normalize(_ line: String) -> String {
+        var out = String.UnicodeScalarView()
+        var lastWasSpace = false
+        for u in line.unicodeScalars {
+            if u.value < 0x20 || u.value == 0x7f || u.value == 0xa0 || u == " " {
+                if !lastWasSpace { out.append(" ") }
+                lastWasSpace = true
+            } else {
+                out.append(u)
+                lastWasSpace = false
+            }
+        }
+        return String(out).trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Claude Code ルール
@@ -102,6 +135,12 @@ public enum AgentDetection {
         .init("transcript", .unknown, 1000, .bottom(3), skip: true,
               .all([.contains(["showing detailed transcript"]),
                     .any([.contains(["ctrl+o"]), .contains(["ctrl+e"]), .contains(["↑↓ scroll"]), .contains(["? for shortcuts"])])])),
+        // フォルダ信頼の確認(新しい作業ディレクトリで claude を起動した初回に必ず出る)。
+        // 裏起動したカードはここで必ず止まるので、盤面に「人間が必要」と出すために Blocked にする。
+        // 起動直後で画面がまだスクロールしておらず、ダイアログは画面上部に出る → .screen で見る。
+        .init("claude_trust_folder", .blocked, 960, .screen,
+              .containsAny(["trust this folder",
+                            "is this a project you created or one you trust"])),
         // bash 権限プロンプト(番号/❯ メニュー付き)。タイトルにスピナーが残っていても Blocked 優先。
         .init("bash_permission", .blocked, 950, .whole,
               .all([.contains(["do you want to proceed?"]),
@@ -111,10 +150,10 @@ public enum AgentDetection {
         .init("generic_permission", .blocked, 940, .whole,
               .all([.contains(["do you want to proceed?"]),
                     .any([.lineRegex("(?i)^\\s*❯?\\s*1\\.\\s*yes\\b"), .lineRegex("(?i)^\\s*2\\.\\s*no\\b"), .contains(["❯"])])])),
-        // 選択フォーム(enter to select / esc to cancel + ナビ導線)
+        // 選択フォーム(enter to select|confirm / esc to cancel + ナビ導線)
         .init("selection_form", .blocked, 930, .whole,
               .all([.contains(["esc to cancel"]),
-                    .any([.contains(["enter to select"]), .contains(["arrow keys"]), .contains(["to navigate"]), .contains(["↑/↓"]), .contains(["↑↓"])])])),
+                    .containsAny(["enter to select", "enter to confirm", "arrow keys", "to navigate", "↑/↓", "↑↓"])])),
         // 弱い権限シグナル
         .init("weak_permission", .blocked, 900, .whole,
               .any([.all([.contains(["do you want to"]), .any([.contains(["yes"]), .contains(["❯"])])]),
