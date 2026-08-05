@@ -502,57 +502,89 @@ public enum ChannelStore {
         return obj["task"] as? String
     }
 
-    // MARK: - カード単位の盤面操作 intent(無所属カードからの委譲)
+    // MARK: - 委譲 intent(無所属カードからの盤面操作)
 
     // チャンネル所属のカードは channels/<id>/board-intents.jsonl を使うが、**まだどのカードとも
     // つながっていないカードにはそのディレクトリが存在しない**。結果、1枚目のカードは
     // fleet_create_card すら呼べず「最初の委譲」が原理的にできなかった(鶏と卵)。
     //
-    // cards/<cardID>/ は無所属でも必ずあるので、そこにカード単位のキューを置く。適用時に
-    // 作成元と新カードを結線してチャンネルを生成するので、「委譲したら文脈を共有する」という
-    // 既存の意味論にもそのまま乗る。
+    // ここは追記ログではなく **1 intent = 1ファイル** にする。ディレクトリの監視イベントは
+    // 「直下の項目が増減したとき」にしか来ないので、既存の .jsonl へ追記しても発火しない
+    // (実機で intent が拾われず気づいた)。ファイルを新規作成すれば確実に発火し、しかも
+    // 単一ディレクトリなので watcher も1つで足りる。
+    //
+    // 適用したファイルは削除する(ファイル自体がキュー)。成否に関わらず削除して再適用しない —
+    // チャンネル側の「適用済み集合」と同じリトライ暴走防止の方針。
 
-    public static func cardIntentsFile(for cardID: UUID) -> URL {
-        cardDir(for: cardID).appending(path: "board-intents.jsonl")
+    public static func delegationDir() -> URL {
+        fleetRoot().appending(path: "delegations", directoryHint: .isDirectory)
     }
 
-    public static func cardIntents(for cardID: UUID) -> [BoardIntent] {
-        guard let text = try? String(contentsOf: cardIntentsFile(for: cardID), encoding: .utf8) else { return [] }
+    /// 壊れて読めない intent の隔離先。放っておくと毎回スキャンされ続けるので退避する。
+    public static func brokenDelegationDir() -> URL {
+        delegationDir().appending(path: "broken", directoryHint: .isDirectory)
+    }
+
+    /// キューの intent を **claim してから** 古い順に返す。
+    ///
+    /// claim は `rename` で行う: 同じ元パスを rename できるのは1プロセスだけなので、これで
+    /// 「読んだのに他プロセスも読める」窓が閉じる(Fleet を2つ起動しても二重作成しない)。
+    /// 適用の**前**に claim するので、適用途中でアプリが落ちても再適用されない —
+    /// **重複作成より取りこぼしを選ぶ**(カードが2枚生えるほうが害が大きい)。
+    /// 落ちた場合 `.claimed-*` が残るので、`recoverAbandonedClaims` で可視化する。
+    ///
+    /// 読めなかったファイルは `broken/` へ退避する(毎回スキャンし続けないため)。
+    public static func claimDelegations() -> [(url: URL, intent: BoardIntent)] {
+        let fm = FileManager.default
+        let urls = (try? fm.contentsOfDirectory(at: delegationDir(), includingPropertiesForKeys: nil)) ?? []
         let dec = decoder()
-        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
-            guard let d = line.data(using: .utf8) else { return nil }
-            return try? dec.decode(BoardIntent.self, from: d)
+        var claimed: [(url: URL, intent: BoardIntent)] = []
+
+        for url in urls where url.pathExtension == "json" {
+            let mine = url.appendingPathExtension("claimed-\(ProcessInfo.processInfo.processIdentifier)")
+            // rename が失敗する = 他プロセスが先に取った or 消えた。触らない。
+            guard (try? fm.moveItem(at: url, to: mine)) != nil else { continue }
+            guard let d = try? Data(contentsOf: mine),
+                  let intent = try? dec.decode(BoardIntent.self, from: d) else {
+                quarantine(mine)
+                continue
+            }
+            claimed.append((mine, intent))
         }
+        return claimed.sorted { $0.intent.createdAt < $1.intent.createdAt }
     }
 
-    /// 主に KanbanKit 側テスト/内部呼び出し用。実運用の追記は fleet-bridge が同じ形式で行う。
-    public static func appendCardIntent(_ intent: BoardIntent, to cardID: UUID) {
-        let dir = cardDir(for: cardID)
+    static func quarantine(_ url: URL) {
+        let dir = brokenDelegationDir()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        guard let data = try? encoder().encode(intent),
-              var line = String(data: data, encoding: .utf8) else { return }
-        line += "\n"
-        withChannelLock(dir) { appendLineAtomically(Data(line.utf8), to: cardIntentsFile(for: cardID)) }
+        try? FileManager.default.moveItem(at: url, to: dir.appending(path: url.lastPathComponent))
     }
 
-    public static func appliedCardIntentIDs(for cardID: UUID) -> Set<String> {
-        let url = cardDir(for: cardID).appending(path: "board-applied.json")
-        guard let d = try? Data(contentsOf: url),
-              let arr = try? JSONDecoder().decode([String].self, from: d) else { return [] }
-        return Set(arr)
-    }
-    public static func writeAppliedCardIntentIDs(_ ids: Set<String>, for cardID: UUID) {
-        let dir = cardDir(for: cardID)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let d = try? JSONEncoder().encode(Array(ids)) {
-            try? d.write(to: dir.appending(path: "board-applied.json"), options: .atomic)
+    /// 前回のプロセスが claim したまま落ちた intent。適用されたか不明なので**自動では再適用せず**、
+    /// `broken/` へ退避して残す(人が中身を見て判断できるように)。件数を返す。
+    @discardableResult
+    public static func recoverAbandonedClaims() -> Int {
+        let fm = FileManager.default
+        let urls = (try? fm.contentsOfDirectory(at: delegationDir(), includingPropertiesForKeys: nil)) ?? []
+        let mine = "claimed-\(ProcessInfo.processInfo.processIdentifier)"
+        var n = 0
+        for url in urls where url.pathExtension.hasPrefix("claimed-") && url.pathExtension != mine {
+            quarantine(url); n += 1
         }
+        return n
     }
 
-    /// カードディレクトリを持つ全カード id(未処理 intent の探索用)。
-    public static func knownCardIDs() -> [UUID] {
-        let urls = (try? FileManager.default.contentsOfDirectory(at: cardsDir(), includingPropertiesForKeys: nil)) ?? []
-        return urls.compactMap { UUID(uuidString: $0.lastPathComponent) }
+    /// 主に KanbanKit 側テスト用。実運用の書き込みは fleet-bridge が同じ形式で行う。
+    public static func appendDelegation(_ intent: BoardIntent) {
+        let dir = delegationDir()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let d = try? encoder().encode(intent) else { return }
+        try? d.write(to: dir.appending(path: "\(intent.id).json"), options: .atomic)
+    }
+
+    /// 処理済みの intent を取り除く。
+    public static func removeDelegation(at url: URL) {
+        try? FileManager.default.removeItem(at: url)
     }
 
     // MARK: - カード束縛(binding.json)

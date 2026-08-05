@@ -33,39 +33,48 @@ final class A2AChannelHub {
         sessions.onCardStateChange = { [weak self] cardID in self?.noteStateChange(cardID) }
     }
 
-    /// 無所属カードからの委譲(cards/<id>/board-intents.jsonl)を拾うための単一 watcher。
-    /// チャンネル watcher は channels/<id>/ しか見ないので、まだどのカードともつながって
-    /// いないカードの intent はそこに現れない。cards/ の親を1つ監視すれば足りる。
-    private var cardsWatcher: (any DispatchSourceFileSystemObject)?
+    /// 委譲 intent(`~/.fleet/delegations/<id>.json`)を拾う watcher。**1つで足りる。**
+    ///
+    /// ここは追記ログではなく 1 intent = 1ファイルにしてある。ディレクトリの監視イベントは
+    /// 「直下の項目が増減したとき」にしか来ないので、既存ファイルへの追記では発火しない
+    /// (実機で intent が拾われず、二段階で踏んだ)。新規ファイルなら確実に発火する。
+    private var delegationWatcher: (any DispatchSourceFileSystemObject)?
+    private var delegationDebounce: Task<Void, Never>?
 
-    private func startWatchingCards() {
-        guard cardsWatcher == nil else { return }
-        let dir = ChannelStore.cardsDir()
+    private func startWatchingDelegations() {
+        guard delegationWatcher == nil else { return }
+        let dir = ChannelStore.delegationDir()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fd = open(dir.path, O_EVTONLY)
         guard fd >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-        src.setEventHandler { [weak self] in self?.applyCardIntentsSoon() }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: .write, queue: .main)
+        src.setEventHandler { [weak self] in self?.applyDelegationsSoon() }
         src.setCancelHandler { close(fd) }
         src.resume()
-        cardsWatcher = src
+        delegationWatcher = src
     }
 
-    /// cards/ の変化は 150ms デバウンスしてから適用する(チャンネル側と同じ扱い)。
-    private var cardsDebounce: Task<Void, Never>?
-    private func applyCardIntentsSoon() {
-        cardsDebounce?.cancel()
-        cardsDebounce = Task { @MainActor [weak self] in
+    /// 監視イベントは 150ms デバウンスしてから適用する(チャンネル側と同じ扱い)。
+    private func applyDelegationsSoon() {
+        delegationDebounce?.cancel()
+        delegationDebounce = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let self, let context = self.context else { return }
-            BoardStore(context: context).applyCardIntents()
+            BoardStore(context: context).applyDelegations()
         }
     }
 
     /// 現在のチャンネル集合に watcher を合わせる。接続/解除で呼ぶ(冪等)。
     func sync(channelIDs: [UUID]) {
-        startWatchingCards()
-        if let context { BoardStore(context: context).applyCardIntents() }
+        startWatchingDelegations()
+        // 前回 claim したまま落ちた intent は自動で再適用しない(重複作成より取りこぼしを選ぶ)。
+        // broken/ へ退避して人が中身を見られるようにするだけ。
+        let abandoned = ChannelStore.recoverAbandonedClaims()
+        if abandoned > 0 {
+            NSLog("[Fleet] 前回処理途中だった委譲 \(abandoned) 件を \(ChannelStore.brokenDelegationDir().path) へ退避しました")
+        }
+        if let context { BoardStore(context: context).applyDelegations() }
         // C1 緩和: binding.json の自己改竄をここ(起動時/接続/解除。ファイル監視イベント毎では
         // ない=コスト低)で真実へ強制的に戻す。件数はカード数程度なので毎回呼んでも安価。
         if let context { BoardStore(context: context).reconcileBindings() }
@@ -125,8 +134,8 @@ final class A2AChannelHub {
     private func runOnce(_ channelID: UUID) async {
         guard let context else { return }
         let store = BoardStore(context: context)
-        store.applyCardIntents()                                     // 無所属カードからの委譲(チャンネル非依存)
-        store.applyBoardIntents(for: channelID)                      // Agent の盤面操作(create/move)を適用
+        store.applyDelegations()                                      // 無所属カードからの委譲(チャンネル非依存)
+        store.applyBoardIntents(for: channelID)                      // Agent の盤面操作(create/move)
         await store.applyWorktreeIntentsAsync(for: channelID)         // Agent の worktree 作成 intent を適用(git は MainActor 外)
         if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期
         store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット(worktree 反映)

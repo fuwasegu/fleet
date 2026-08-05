@@ -182,12 +182,15 @@ grep -q 'Requested new card' "$OUT4" || fail "create_card from an unconnected ca
 grep -q 'review this PR'     "$OUT4" || fail "created card title missing from the response"
 # 逆に、本当にチャンネルが要るツールは従来どおり拒否される
 grep -q 'not currently in a shared channel' "$OUT4" || fail "fleet_recall should still require a channel"
-# intent はカード単位のキューへ書かれ、agent/model も載る
-CINT="$ROOT4/cards/$CARD4/board-intents.jsonl"
-[ -f "$CINT" ] || fail "card-scoped board-intents.jsonl not created"
-grep -q '"kind":"create_card"' "$CINT" || fail "create_card intent missing from card queue"
-grep -q '"agent":"codex"'      "$CINT" || fail "agent not persisted in card queue"
-grep -q 'gpt-5-codex'          "$CINT" || fail "model not persisted in card queue"
+# intent は委譲キューへ「1 intent = 1ファイル」で書かれ、agent/model も載る。
+# 追記ログにしないのは、Fleet 本体がディレクトリ監視で拾うため(既存ファイルへの追記では
+# 監視イベントが発火せず永久に拾われない — 実機で踏んだ)。
+DCOUNT="$(ls "$ROOT4/delegations"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+[ "$DCOUNT" = "1" ] || fail "expected exactly 1 delegation file (has $DCOUNT)"
+DFILE="$(ls "$ROOT4/delegations"/*.json | head -1)"
+grep -q '"kind":"create_card"' "$DFILE" || fail "create_card intent missing from delegation queue"
+grep -q '"agent":"codex"'      "$DFILE" || fail "agent not persisted in delegation queue"
+grep -q 'gpt-5-codex'          "$DFILE" || fail "model not persisted in delegation queue"
 # チャンネル dir を勝手に作っていないこと(無所属のまま)
 [ -d "$ROOT4/channels" ] && fail "unconnected card must not create a channel dir from the bridge" || true
 

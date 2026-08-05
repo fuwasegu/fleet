@@ -79,3 +79,25 @@
 
 参考: 設計 `docs/superpowers/specs/2026-07-28-fleet-orchestration-design.md`（ブランチ側）、
 FSL `orchestration.fsl`（safety proved / liveness verified）、`orchestration_stale.fsl`（反例）。
+
+## 委譲(fleet_create_card)の残件 ※2026-08 のレビューで挙がったが未対応
+
+### 裏で勝手に走らない(一番大きい)
+委譲でカードは生えるが、**Agent はそのカードのターミナルを人が開くまで起動しない**。
+`sessions.view(for:)` の唯一の呼び出し元が `makeNSView` なので、SwiftUI が描画するまで PTY が
+立たない。したがって `fleet_message` の宛先も live にならず、「勝手にカードができて勝手に
+作業が進む」には至っていない。
+
+試したところ **PTY 自体は裏でも立つ**(`frame: .zero` だと winsize が 0x0 になるので非ゼロの
+初期フレームが必要)。ただし `term.onReady`(シェルの初回出力が落ち着いたら起動コマンドを送る)
+がウィンドウに載っていないビューでは発火せず、**シェルは立つが claude が走らない**状態で止まった。
+`onReady` の発火条件を作り直すのが次の一手。あわせて必要なのは:
+- 裏起動したカードを人が開いたときの二重起動防止
+- 起動条件(トークンを勝手に焼かないための歯止め)。「人が意図した委譲の結果」に限るのが妥当
+
+### チャンネル経由の board-intents にプロセス間ロックが無い
+`board-applied.json` の読み書きが無保護なので、Fleet を2つ起動すると `create_card` /
+`move_card` の二重適用や applied 集合の上書きが起こり得る。委譲キュー側は claim(rename)で
+閉じたが、こちらは手付かず。そもそも同一 `FLEET_ROOT` で2プロセスは SwiftData の同時書き込みに
+なるため未サポートだが、構造としては穴。
+

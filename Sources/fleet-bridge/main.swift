@@ -215,29 +215,19 @@ func writeStatus(_ channelDir: URL, task: String) {
 
 // MARK: - 盤面操作 intent(board-intents.jsonl)+ スナップショット(board.json)
 
-/// カードディレクトリ(cards/<cardID>/)。無所属でも必ず存在する。
-func currentCardDir() -> URL? {
-    guard !cardID.isEmpty else { return nil }
-    return fleetRoot.appendingPathComponent("cards/\(cardID)", isDirectory: true)
-}
-
-/// 無所属カードからの盤面操作 intent を cards/<cardID>/board-intents.jsonl へ追記する。
+/// 無所属カードからの盤面操作 intent を `delegations/<intentID>.json` へ書く。
 ///
-/// チャンネル所属カードは channels/<id>/ に書くが、**まだどのカードともつながっていない
-/// カードにはそのディレクトリが無い**。以前はそのせいで1枚目のカードが fleet_create_card
-/// すら呼べず、「最初の委譲」が原理的にできなかった。Fleet 本体が適用時に作成元と結線して
-/// チャンネルを作るので、そこから先は通常の A2A と同じになる。
-func appendCardIntent(_ line: Data) {
-    guard let dir = currentCardDir() else { return }
+/// チャンネル所属カードは channels/<id>/board-intents.jsonl に追記するが、**まだどのカードとも
+/// つながっていないカードにはそのディレクトリが無い**。以前はそのせいで1枚目のカードが
+/// fleet_create_card すら呼べず、「最初の委譲」が原理的にできなかった。
+///
+/// 追記ではなく **1 intent = 1ファイル** にするのは、Fleet 本体がディレクトリ監視で拾うため。
+/// 監視イベントは「直下の項目が増減したとき」にしか来ないので、既存ファイルへの追記だと
+/// 発火せず永久に拾われない(実機で踏んだ)。
+func writeDelegation(_ intentID: String, _ data: Data) {
+    let dir = fleetRoot.appendingPathComponent("delegations", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    withChannelLock(dir) {
-        let url = dir.appendingPathComponent("board-intents.jsonl")
-        let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
-        guard fd >= 0 else { return }
-        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        try? h.write(contentsOf: line)
-        try? h.close()
-    }
+    try? data.write(to: dir.appendingPathComponent("\(intentID).json"), options: .atomic)
 }
 
 func appendBoardIntent(_ entry: [String: Any]) {
@@ -248,8 +238,11 @@ func appendBoardIntent(_ entry: [String: Any]) {
     guard let d = try? JSONSerialization.data(withJSONObject: e),
           let s = String(data: d, encoding: .utf8) else { return }
     let line = Data((s + "\n").utf8)
-    // 無所属ならカード単位のキューへ回す(チャンネル dir が無いので書けない)。
-    guard currentChannelDir() != nil else { appendCardIntent(line); return }
+    // 無所属なら委譲キューへ回す(チャンネル dir が無いので書けない)。
+    guard currentChannelDir() != nil else {
+        writeDelegation(e["id"] as? String ?? UUID().uuidString, d)
+        return
+    }
     withResolvedChannelLocked { channelDir in
         let url = channelDir.appendingPathComponent("board-intents.jsonl")
         let fd = url.path.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, 0o644) }
@@ -488,10 +481,22 @@ func handleCreateCard(_ id: Any, _ arguments: [String: Any]) {
        ["claude", "codex"].contains(agent) {
         intent["agent"] = agent
     }
-    // model は起動コマンド文字列へ入るので、Fleet 本体側でも normalizedModel を通す(多層防御)。
-    if let model = (arguments["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !model.isEmpty {
-        intent["model"] = String(model.prefix(maxModelLength))
+    // model は最終的に起動コマンド文字列へ入る。権威ある検証は KanbanKit の
+    // AgentLaunch.normalizedModel だが(bridge は KanbanKit にリンクできない)、ここで黙って
+    // 落とすと Agent は「指定したつもりで既定モデルが走る」ことに気づけない。同じ文字集合で
+    // 検査して**エラーを返す**。許可文字を変えるときは AgentLaunch 側と合わせること。
+    if let raw = arguments["model"] as? String {
+        let model = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty {
+            let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-[]")
+            guard model.count <= maxModelLength, model.allSatisfy({ allowed.contains($0) }) else {
+                sendResult(id, textContent(
+                    "model may only contain letters, digits and . _ - [ ] (no spaces), max \(maxModelLength) characters. Got: \(model.prefix(40))",
+                    isError: true))
+                return
+            }
+            intent["model"] = model
+        }
     }
     appendBoardIntent(intent)
     sendResult(id, textContent("""
