@@ -74,13 +74,20 @@ public struct BoardIntent: Codable, Identifiable, Sendable {
     public let card: String?       // move_card: 対象カード(id or title)
     public let column: String?     // 対象列名
     public let dir: String?        // create_card: 作業ディレクトリ
+    /// create_card: 新カードで動かす Agent 種別("claude" | "codex")。nil は claude。
+    /// これが無いと「Codex のカードを作ってレビューさせて」を Agent 側から表現できなかった。
+    public let agent: String?
+    /// create_card: 新カードで使うモデル。nil は CLI の既定。検証は `AgentLaunch.normalizedModel`。
+    public let model: String?
     public let createdAt: Date
 
     public init(id: String = UUID().uuidString, kind: String, fromID: String,
                 title: String? = nil, card: String? = nil, column: String? = nil,
-                dir: String? = nil, createdAt: Date = Date()) {
+                dir: String? = nil, agent: String? = nil, model: String? = nil,
+                createdAt: Date = Date()) {
         self.id = id; self.kind = kind; self.fromID = fromID; self.title = title
-        self.card = card; self.column = column; self.dir = dir; self.createdAt = createdAt
+        self.card = card; self.column = column; self.dir = dir
+        self.agent = agent; self.model = model; self.createdAt = createdAt
     }
 }
 
@@ -493,6 +500,59 @@ public enum ChannelStore {
         guard let d = try? Data(contentsOf: statusFile(cardID: cardID, channelID: channelID)),
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
         return obj["task"] as? String
+    }
+
+    // MARK: - カード単位の盤面操作 intent(無所属カードからの委譲)
+
+    // チャンネル所属のカードは channels/<id>/board-intents.jsonl を使うが、**まだどのカードとも
+    // つながっていないカードにはそのディレクトリが存在しない**。結果、1枚目のカードは
+    // fleet_create_card すら呼べず「最初の委譲」が原理的にできなかった(鶏と卵)。
+    //
+    // cards/<cardID>/ は無所属でも必ずあるので、そこにカード単位のキューを置く。適用時に
+    // 作成元と新カードを結線してチャンネルを生成するので、「委譲したら文脈を共有する」という
+    // 既存の意味論にもそのまま乗る。
+
+    public static func cardIntentsFile(for cardID: UUID) -> URL {
+        cardDir(for: cardID).appending(path: "board-intents.jsonl")
+    }
+
+    public static func cardIntents(for cardID: UUID) -> [BoardIntent] {
+        guard let text = try? String(contentsOf: cardIntentsFile(for: cardID), encoding: .utf8) else { return [] }
+        let dec = decoder()
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let d = line.data(using: .utf8) else { return nil }
+            return try? dec.decode(BoardIntent.self, from: d)
+        }
+    }
+
+    /// 主に KanbanKit 側テスト/内部呼び出し用。実運用の追記は fleet-bridge が同じ形式で行う。
+    public static func appendCardIntent(_ intent: BoardIntent, to cardID: UUID) {
+        let dir = cardDir(for: cardID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let data = try? encoder().encode(intent),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line += "\n"
+        withChannelLock(dir) { appendLineAtomically(Data(line.utf8), to: cardIntentsFile(for: cardID)) }
+    }
+
+    public static func appliedCardIntentIDs(for cardID: UUID) -> Set<String> {
+        let url = cardDir(for: cardID).appending(path: "board-applied.json")
+        guard let d = try? Data(contentsOf: url),
+              let arr = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+        return Set(arr)
+    }
+    public static func writeAppliedCardIntentIDs(_ ids: Set<String>, for cardID: UUID) {
+        let dir = cardDir(for: cardID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(Array(ids)) {
+            try? d.write(to: dir.appending(path: "board-applied.json"), options: .atomic)
+        }
+    }
+
+    /// カードディレクトリを持つ全カード id(未処理 intent の探索用)。
+    public static func knownCardIDs() -> [UUID] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: cardsDir(), includingPropertiesForKeys: nil)) ?? []
+        return urls.compactMap { UUID(uuidString: $0.lastPathComponent) }
     }
 
     // MARK: - カード束縛(binding.json)

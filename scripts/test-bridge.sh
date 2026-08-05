@@ -43,6 +43,9 @@ OUT="$(mktemp)"
   echo '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"fleet_board","arguments":{}}}'
   echo '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"client work","column":"Todo"}}}'
   echo '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"fleet_move_card","arguments":{"card":"client work","column":"Done"}}}'
+  # 委譲: agent/model 付きのカード作成(「Codex のカードを立ててレビューさせて」の要)
+  echo '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"review","agent":"codex","model":"gpt-5-codex"}}}'
+  echo '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"bad agent","agent":"gemini"}}}'
   echo "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"fleet_remember\",\"arguments\":{\"text\":\"$BIG\"}}}"
   echo 'this is not json'
   echo '{"jsonrpc":"2.0","id":6,"method":"nonsense/method"}'
@@ -78,6 +81,7 @@ grep -q 'Released.*Models.swift'  "$OUT" || fail "fleet_release not acknowledged
 grep -q 'Board columns: Todo | Done' "$OUT" || fail "fleet_board did not render columns"
 grep -q 'Requested new card'       "$OUT" || fail "fleet_create_card not acknowledged"
 grep -q 'Requested move'           "$OUT" || fail "fleet_move_card not acknowledged"
+# agent/model が intent に載ること / 未知の agent は載らない(本体側で claude に落ちる)
 
 # 上限超えの巨大ノートが memory.jsonl に書かれていないこと(hello-ci + decision の2行)
 LINES="$(wc -l < "$ROOT/channels/$CHAN/memory.jsonl" | tr -d ' ')"
@@ -87,9 +91,15 @@ grep -q '"kind":"decision"'       "$ROOT/channels/$CHAN/memory.jsonl" || fail "k
 # board-intents に create + move の2行
 BINT="$ROOT/channels/$CHAN/board-intents.jsonl"
 [ -f "$BINT" ] || fail "board-intents.jsonl not created"
-[ "$(wc -l < "$BINT" | tr -d ' ')" = "2" ] || fail "expected 2 board intents"
+# create_card x3 (通常/agent+model/未知の agent) + move_card x1
+[ "$(wc -l < "$BINT" | tr -d ' ')" = "4" ] || fail "expected 4 board intents (has $(wc -l < "$BINT" | tr -d ' '))"
 grep -q '"kind":"create_card"'    "$BINT" || fail "create_card intent missing"
 grep -q '"kind":"move_card"'      "$BINT" || fail "move_card intent missing"
+# 委譲: agent/model が intent に載ること
+grep -q '"agent":"codex"'         "$BINT" || fail "agent not persisted in board intent"
+grep -q 'gpt-5-codex'             "$BINT" || fail "model not persisted in board intent"
+# 未知の agent はそもそも intent に載せない(本体側で claude に落ちる)
+grep -q 'gemini'                  "$BINT" && fail "unknown agent should not be written to the intent" || true
 # locks.json は release 後に空
 grep -q 'Models.swift' "$ROOT/channels/$CHAN/locks.json" && fail "lock not cleared after release" || true
 
@@ -151,5 +161,34 @@ REFS_COUNT="$(printf '%s' "$LAST_LINE" | python3 -c 'import json,sys; print(len(
 [ "$REFS_COUNT" = "20" ] || fail "refs array was not capped to 20 elements (got $REFS_COUNT)"
 MAXLEN="$(printf '%s' "$LAST_LINE" | python3 -c 'import json,sys; refs=json.load(sys.stdin).get("refs", []); print(max((len(r) for r in refs), default=0))')"
 [ "$MAXLEN" -le 200 ] || fail "a ref element was not truncated to 200 chars (got $MAXLEN)"
+
+
+# --- 無所属カードからの委譲: fleet_create_card だけはチャンネル無しでも通ること ---
+#     ここが塞がっていると「カードを作るにはチャンネルが必要 / チャンネルを作るには
+#     カードを2枚手で結線」という鶏と卵になり、1枚目のカードは何も委譲できない。
+ROOT4="$(mktemp -d)"
+CARD4="55555555-5555-5555-5555-555555555555"
+mkdir -p "$ROOT4/cards/$CARD4"
+printf '{"name":"loneCard"}' > "$ROOT4/cards/$CARD4/binding.json"   # channel を持たない
+OUT4="$(mktemp)"
+{
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fleet_create_card","arguments":{"title":"review this PR","agent":"codex","model":"gpt-5-codex"}}}'
+  echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fleet_recall","arguments":{}}}'
+} | "$BRIDGE" --root "$ROOT4" --card "$CARD4" > "$OUT4"
+
+# create_card は成功する
+grep -q 'Requested new card' "$OUT4" || fail "create_card from an unconnected card was rejected"
+grep -q 'review this PR'     "$OUT4" || fail "created card title missing from the response"
+# 逆に、本当にチャンネルが要るツールは従来どおり拒否される
+grep -q 'not currently in a shared channel' "$OUT4" || fail "fleet_recall should still require a channel"
+# intent はカード単位のキューへ書かれ、agent/model も載る
+CINT="$ROOT4/cards/$CARD4/board-intents.jsonl"
+[ -f "$CINT" ] || fail "card-scoped board-intents.jsonl not created"
+grep -q '"kind":"create_card"' "$CINT" || fail "create_card intent missing from card queue"
+grep -q '"agent":"codex"'      "$CINT" || fail "agent not persisted in card queue"
+grep -q 'gpt-5-codex'          "$CINT" || fail "model not persisted in card queue"
+# チャンネル dir を勝手に作っていないこと(無所属のまま)
+[ -d "$ROOT4/channels" ] && fail "unconnected card must not create a channel dir from the bridge" || true
 
 echo "fleet-bridge protocol test: OK"

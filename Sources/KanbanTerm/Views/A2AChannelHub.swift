@@ -33,8 +33,39 @@ final class A2AChannelHub {
         sessions.onCardStateChange = { [weak self] cardID in self?.noteStateChange(cardID) }
     }
 
+    /// 無所属カードからの委譲(cards/<id>/board-intents.jsonl)を拾うための単一 watcher。
+    /// チャンネル watcher は channels/<id>/ しか見ないので、まだどのカードともつながって
+    /// いないカードの intent はそこに現れない。cards/ の親を1つ監視すれば足りる。
+    private var cardsWatcher: (any DispatchSourceFileSystemObject)?
+
+    private func startWatchingCards() {
+        guard cardsWatcher == nil else { return }
+        let dir = ChannelStore.cardsDir()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fd = open(dir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        src.setEventHandler { [weak self] in self?.applyCardIntentsSoon() }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        cardsWatcher = src
+    }
+
+    /// cards/ の変化は 150ms デバウンスしてから適用する(チャンネル側と同じ扱い)。
+    private var cardsDebounce: Task<Void, Never>?
+    private func applyCardIntentsSoon() {
+        cardsDebounce?.cancel()
+        cardsDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, let context = self.context else { return }
+            BoardStore(context: context).applyCardIntents()
+        }
+    }
+
     /// 現在のチャンネル集合に watcher を合わせる。接続/解除で呼ぶ(冪等)。
     func sync(channelIDs: [UUID]) {
+        startWatchingCards()
+        if let context { BoardStore(context: context).applyCardIntents() }
         // C1 緩和: binding.json の自己改竄をここ(起動時/接続/解除。ファイル監視イベント毎では
         // ない=コスト低)で真実へ強制的に戻す。件数はカード数程度なので毎回呼んでも安価。
         if let context { BoardStore(context: context).reconcileBindings() }
@@ -94,6 +125,7 @@ final class A2AChannelHub {
     private func runOnce(_ channelID: UUID) async {
         guard let context else { return }
         let store = BoardStore(context: context)
+        store.applyCardIntents()                                     // 無所属カードからの委譲(チャンネル非依存)
         store.applyBoardIntents(for: channelID)                      // Agent の盤面操作(create/move)を適用
         await store.applyWorktreeIntentsAsync(for: channelID)         // Agent の worktree 作成 intent を適用(git は MainActor 外)
         if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期

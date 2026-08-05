@@ -158,6 +158,11 @@ public struct BoardStore {
         for ch in (try? channels()) ?? [] { syncChannel(ch) }
     }
 
+    /// 盤面の全カード。列を跨いで探すときに使う。
+    public func cards() throws -> [Card] {
+        try context.fetch(FetchDescriptor<Card>())
+    }
+
     public func card(withID id: UUID) -> Card? {
         let descriptor = FetchDescriptor<Card>(predicate: #Predicate { $0.id == id })
         return try? context.fetch(descriptor).first
@@ -326,14 +331,9 @@ public struct BoardStore {
             let cols = (try? columns()) ?? []
             switch intent.kind {
             case "create_card":
-                guard let title = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { break }
-                guard let col = cols.first(where: { $0.name == intent.column }) ?? cols.first else { break }
-                let dir = (intent.dir?.isEmpty == false) ? intent.dir : nil
-                if let card = try? addCard(title: title, to: col, workingDirPath: dir) {
-                    // 作成元と同じチャンネルへ参加させて文脈を共有(委譲の要)。
-                    let anchor = ch.cards.first { $0.id.uuidString == intent.fromID } ?? ch.cards.first
-                    if let anchor { try? connectCards(card, anchor) }
-                }
+                // 作成元と同じチャンネルへ参加させて文脈を共有(委譲の要)。
+                let anchor = ch.cards.first { $0.id.uuidString == intent.fromID } ?? ch.cards.first
+                _ = createCard(from: intent, columns: cols, connectTo: anchor)
             case "move_card":
                 guard let ref = intent.card, let colName = intent.column,
                       let col = cols.first(where: { $0.name == colName }) else { break }
@@ -344,6 +344,47 @@ public struct BoardStore {
             }
         }
         if didApply { ChannelStore.writeAppliedIntentIDs(applied, for: channelID) }
+    }
+
+    /// `create_card` intent からカードを1枚作る。チャンネル経由とカード経由の**唯一の実装**。
+    /// 片方だけ挙動が変わると「無所属から作ったカードだけ agent が効かない」といった
+    /// ズレを生むので、必ずここを通す。
+    @discardableResult
+    func createCard(from intent: BoardIntent, columns cols: [BoardColumn],
+                    connectTo anchor: Card?) -> Card? {
+        guard let title = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        guard let col = cols.first(where: { $0.name == intent.column }) ?? cols.first else { return nil }
+        let dir = (intent.dir?.isEmpty == false) ? intent.dir : nil
+        // agent は Agent が渡す任意の文字列。未知の値は既定(claude)に落とす。
+        let kind = AgentKind(rawValue: (intent.agent ?? "").lowercased()) ?? .claude
+        guard let card = try? addCard(title: title, to: col, workingDirPath: dir,
+                                     agentKind: kind, model: intent.model) else { return nil }
+        if let anchor, anchor.id != card.id { try? connectCards(card, anchor) }
+        return card
+    }
+
+    /// カード単位の `board-intents.jsonl` を適用する(まだどのカードともつながっていない
+    /// カードからの委譲)。適用時に作成元と結線するので、ここでチャンネルが生まれる。
+    ///
+    /// チャンネル所属カードもこのキューに書きうる(bridge は無所属のときだけ使うが、
+    /// 取りこぼしを避けるため所属の有無で分岐しない)。`connectCards` は既に同一チャンネルなら
+    /// 何もしないので二重参加にはならない。
+    public func applyCardIntents() {
+        for cardID in ChannelStore.knownCardIDs() {
+            let intents = ChannelStore.cardIntents(for: cardID)
+            guard !intents.isEmpty else { continue }
+            var applied = ChannelStore.appliedCardIntentIDs(for: cardID)
+            var didApply = false
+            let cols = (try? columns()) ?? []
+            for intent in intents where !applied.contains(intent.id) {
+                applied.insert(intent.id); didApply = true
+                guard intent.kind == "create_card" else { continue }
+                // 作成元カードが盤面から消えていたら何もしない(孤児カードを作らない)。
+                guard let creator = card(withID: cardID) else { continue }
+                createCard(from: intent, columns: cols, connectTo: creator)
+            }
+            if didApply { ChannelStore.writeAppliedCardIntentIDs(applied, for: cardID) }
+        }
     }
 
     /// Agent の worktree 作成 intent(worktree-intents.jsonl)を適用する(同期版)。
