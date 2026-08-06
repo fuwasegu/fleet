@@ -55,14 +55,23 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// Blocked のときは端末バッファから実際の問いも取り出す。
     private func classify() -> (AgentState, String?)? {
         let lines = bottomLines(24)
-        guard let state = AgentDetection.classify(kind: agentKind, title: latestTitle, lines: lines) else { return nil }
-        let question = (state == .blocked) ? Self.extractQuestion(from: lines) : nil
+        let screen = screenLines()
+        guard let state = AgentDetection.classify(kind: agentKind, title: latestTitle,
+                                                 lines: lines, screen: screen) else { return nil }
+        // 問いは画面全体から探す(起動直後の全画面ダイアログは下部窓の外に出る)。
+        let question = (state == .blocked) ? Self.extractQuestion(from: screen) : nil
         return (state, question)
     }
 
     /// このカードのエージェント種別(検知ルールの切替に使う)。
     private var agentKind: AgentKind {
         BoardStore(context: context).card(withID: cardID)?.agentKind ?? .claude
+    }
+
+    /// 可視画面の全行。起動直後は出力が短く画面がスクロールしていないため、全画面ダイアログは
+    /// 画面**上部**に描かれる。下部窓(`bottomLines`)だけでは本体を取りこぼす。
+    private func screenLines() -> [String] {
+        bottomLines(term?.getTerminal().rows ?? 24)
     }
 
     private func bottomLines(_ n: Int) -> [String] {
@@ -90,9 +99,13 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// 承認ボックスの問い(例: "Do you want to make this edit?")を1行取り出す。罫線・記号は除去。
     private static func extractQuestion(from lines: [String]) -> String? {
         let frame = CharacterSet(charactersIn: " │╭╮╰╯─┃┏┓┗┛┌┐└┘|>❯•*")
+        let markers = ["do you want", "would you like", "is this a project you created"]
         for line in lines {
-            let cleaned = line.trimmingCharacters(in: frame).trimmingCharacters(in: .whitespaces)
-            if cleaned.lowercased().contains("do you want") {
+            // 検知と同じ正規化を通す(語間が制御文字で埋まっている行があるため)。
+            let cleaned = AgentDetection.normalize(line)
+                .trimmingCharacters(in: frame).trimmingCharacters(in: .whitespaces)
+            let lower = cleaned.lowercased()
+            if markers.contains(where: { lower.contains($0) }) {
                 return String(cleaned.prefix(80))
             }
         }
@@ -233,7 +246,7 @@ final class TerminalSessions {
         // **frame は必ず非ゼロで作る。** SwiftUI に載せる場合はレイアウトで上書きされるが、
         // 裏で起動する(ウィンドウに載せない)場合は誰もサイズを与えないため、.zero のままだと
         // PTY の winsize が 0x0 になり TUI が描画できず、AgentDetection もバッファ行を
-        // 読めない。おおよそ 100x35 相当の妥当な初期サイズを与えておく。
+        // 読めない。実測で 120x40 グリッドになる初期サイズを与えておく。
         let term = MonitoredTerminalView(frame: Self.defaultTerminalFrame)
         term.font = TerminalSettings.resolvedFont()   // 設定フォントを適用
         Self.applyTheme(TerminalSettings.resolvedTheme(), to: term)
@@ -269,7 +282,10 @@ final class TerminalSessions {
                                          dangerSkip: dangerSkip, context: context)
             let bytes = ArraySlice(Array((cmd + "\n").utf8))
             // 固定ディレイではなく、シェルのプロンプトが準備できてから送る(取りこぼし防止)。
-            term.onReady = { [weak term] in term?.send(source: term!, data: bytes) }
+            term.onReady = { [weak term] in
+                guard let term else { return }
+                term.send(source: term, data: bytes)
+            }
         }
         views[cardID] = term
         uiState.resumeRequests[cardID] = nil   // 復帰要求は一度きり(再オープンで再復帰しない)
@@ -509,12 +525,23 @@ final class TerminalSessions {
         term.caretColor = NSColor(hex: theme.caret)
     }
 
-    /// このカードのターミナルセッションが既に生きているか。シェルが自然終了した(死亡マーク
-    /// 済み)ものは、view 自体はまだ overlay 表示用に残っていても「使用中」とはみなさない。
-    /// ウィンドウに載せずに起動するときの初期サイズ(約 100x35 相当)。
-    /// SwiftUI 経由ではレイアウトが上書きするので、実質「裏起動用の既定値」。
+    /// ウィンドウに載せずに起動するときの初期サイズ(実測 120x40 グリッド相当)。
+    /// `.zero` だと TUI が描画できず初回プロンプトが出ないため、必ず非ゼロで作る。
     static let defaultTerminalFrame = CGRect(x: 0, y: 0, width: 960, height: 600)
 
+    /// **人がターミナルを開かなくても** セッションを起動する。
+    /// 既にセッションがあれば何もしない(人が後からカードを開いても二重起動しない)。
+    @discardableResult
+    func startInBackground(cardID: UUID, directory: String?, dangerSkip: Bool,
+                           context: ModelContext, uiState: BoardUIState) -> Bool {
+        guard views[cardID] == nil else { return false }
+        _ = view(for: cardID, directory: directory, startAgent: true,
+                 dangerSkip: dangerSkip, context: context, uiState: uiState)
+        return true
+    }
+
+    /// このカードのターミナルセッションが既に生きているか。シェルが自然終了した(死亡マーク
+    /// 済み)ものは、view 自体はまだ overlay 表示用に残っていても「使用中」とはみなさない。
     func hasSession(_ cardID: UUID) -> Bool { views[cardID] != nil && !deadSessions.contains(cardID) }
 
     /// `AgentStateMonitor.processTerminated` から呼ばれる。SwiftTerm の view/monitor は

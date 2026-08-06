@@ -33,6 +33,73 @@ struct AgentDetectionTests {
         #expect(c("", lines) == .blocked)
     }
 
+    @Test func claudeTrustFolderPromptIsBlocked() {
+        // claude 2.1.220 の実画面(新しい作業ディレクトリでの初回起動)。
+        // 裏起動したカードは必ずここで止まるので、Unknown ではなく Blocked にしないと
+        // 「人間を待っている」ことが盤面に出ない(実バグの回帰)。
+        let lines = [
+            "Accessing workspace:",
+            "/Users/me/fresh-dir",
+            "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+            "project, or work from your team). If not, take a moment to review what's in this folder first.",
+            "Claude Code'll be able to read, edit, and execute files here.",
+            "Security guide",
+            "❯ 1. Yes, I trust this folder",
+            "  2. No, exit",
+            "Enter to confirm · Esc to cancel",
+        ]
+        #expect(c("", lines) == .blocked)
+    }
+
+    @Test func claudeTrustFolderIsBlockedEvenIfTheQuestionWraps() {
+        // 幅が狭いと問いの文が折り返して contains が切れる。メニュー行だけでも拾えること。
+        let lines = ["Quick safety check: Is this a project you created or",
+                     "one you trust?",
+                     "❯ 1. Yes, I trust this folder",
+                     "  2. No, exit"]
+        #expect(c("", lines) == .blocked)
+    }
+
+    @Test func claudeTrustFolderIsBlockedEvenWhenItIsAboveTheBottomWindow() {
+        // 実測(dev ビルド計測): 起動直後は画面がスクロールしていないため、40 行の端末で
+        // ダイアログは上部に描かれ、下部 24 行にはほぼ何も無い(全画面非空=15 / 窓内非空=4)。
+        // 下部窓しか見ていないと Unknown のままになり、盤面が「人間待ち」を示せなかった。
+        let screen = ["❯ claude --session-id ...",
+                      "────────────────────────────",
+                      "Accessing workspace:",
+                      "/private/tmp/fresh-dir",
+                      "Quick safety check: Is this a project you created or one you trust? (Like",
+                      "❯ 1. Yes, I trust this folder",
+                      "  2. No, exit",
+                      "Enter to confirm · Esc to cancel"]
+        let bottomWindow = ["", "", "", ""]   // 下部窓は空
+        #expect(AgentDetection.classify(kind: .claude, title: "", lines: bottomWindow, screen: screen) == .blocked)
+        // screen を渡さない旧来の呼び出しでは lines がそのまま画面扱い(後方互換)
+        #expect(AgentDetection.classify(kind: .claude, title: "", lines: bottomWindow) == nil)
+    }
+
+    @Test func claudeTrustFolderIsBlockedWhenGapsAreControlCharsNotSpaces() {
+        // 実測: SwiftTerm のバッファは書き込まれていないセルを NUL で返すため、語間が空白では
+        // なく制御文字になる。素の contains は当たらず Unknown のままだった(実バグの回帰)。
+        let nul = "\u{0}"
+        let screen = ["Quick\(nul)safety\(nul)check:\(nul)Is\(nul)this\(nul)a\(nul)project\(nul)you\(nul)created\(nul)or\(nul)one\(nul)you\(nul)trust?",
+                      "❯\(nul)1.\(nul)Yes,\(nul)I\(nul)trust\(nul)this\(nul)folder"]
+        #expect(AgentDetection.classify(kind: .claude, title: "", lines: [], screen: screen) == .blocked)
+    }
+
+    @Test func normalizeCollapsesControlCharRunsIntoSingleSpaces() {
+        #expect(AgentDetection.normalize("Accessing\u{0}workspace:") == "Accessing workspace:")
+        #expect(AgentDetection.normalize("a\u{0}\u{0}\u{0}b") == "a b")
+        #expect(AgentDetection.normalize("  padded \u{0} ") == "padded")
+        #expect(AgentDetection.normalize("\u{0}\u{0}\u{0}").isEmpty)   // 空行として扱えること
+    }
+
+    @Test func claudeConfirmSelectionFormIsBlocked() {
+        // 「enter to confirm」系のダイアログ(select だけでなく confirm も待ち)
+        let lines = ["Choose one", "❯ 1. foo", "  2. bar", "Enter to confirm · Esc to cancel"]
+        #expect(c("", lines) == .blocked)
+    }
+
     @Test func claudeIdleFromStarTitle() { #expect(c("\u{2733} ready", []) == .idle) }
 
     @Test func claudeIdleFromPromptCaret() {
