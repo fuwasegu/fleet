@@ -65,6 +65,7 @@
   .card .k{font-family:var(--mono);font-size:12px;letter-spacing:.06em;margin-bottom:10px}
   .card h3{margin:.2em 0 .4em;font-size:17px}
   .card p{margin:0;color:var(--muted);font-size:14px}
+  .card p strong{color:var(--text);font-weight:600}
   .tag-blocked{color:var(--red)} .tag-working{color:var(--green)}
   .tag-blue{color:var(--blue)} .tag-amber{color:var(--amber)} .tag-mut{color:var(--muted)}
 
@@ -128,7 +129,12 @@
       <div class="card">
         <div class="k tag-working">🔗 shared context</div>
         <h3><span lang="en">Agents that work together</span><span lang="ja">連携するエージェント</span></h3>
-        <p><span lang="en">Link two cards and their agents share a context channel — shared notes, each other's live status, direct hand-offs, file locks, even spinning off a new card to delegate — the new card starts its own agent without you opening it. All local, no cloud.</span><span lang="ja">カードを線でつなぐと、その Agent 同士が文脈を共有。共有メモ・相手の状態・直接の引き継ぎ・ファイルロック、さらにカードを作って委譲することもできる（作られたカードは開かなくても自分で起動する）。すべてローカル完結、クラウド不要。</span></p>
+        <p><span lang="en">Link two cards and their agents share a context channel — shared notes, each other's live status, direct hand-offs, file locks. All local, no cloud.</span><span lang="ja">カードを線でつなぐと、その Agent 同士が文脈を共有。共有メモ・相手の状態・直接の引き継ぎ・ファイルロック。すべてローカル完結、クラウド不要。</span></p>
+      </div>
+      <div class="card">
+        <div class="k tag-working">✦ agents spawn cards</div>
+        <h3><span lang="en">Agents that make more agents</span><span lang="ja">エージェントがカードを生む</span></h3>
+        <p><span lang="en">Ask in plain language — "make a card in <code>~/repos/legacy</code> and have it work out how auth is done there", or "spin up a Codex card to review this PR" — and your agent creates a real card on the board, with its own directory, CLI and model. <strong>The new card starts its own agent by itself</strong>, and the two share a channel from the start, so work is pushed to it and read back without you opening anything.</span><span lang="ja">「<code>~/repos/legacy</code> にカードを作って、そっちで認証の仕組みを調べさせて」「Codex のカードを立てて、この PR をレビューさせて」— 自然語で頼むと、エージェントが盤面に実際のカードを作る。ディレクトリ・CLI・モデルもそれぞれ指定できる。<strong>作られたカードは自分でエージェントを起動する</strong>。最初から同じチャンネルにいるので、あなたが何も開かなくても仕事が渡り、結果が返ってくる。</span></p>
       </div>
       <div class="card">
         <div class="k"><span class="tag-working">● WORKING</span> / <span class="tag-blocked">● BLOCKED</span></div>
