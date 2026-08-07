@@ -366,7 +366,13 @@ public struct BoardStore {
         let dir = Self.validatedWorkingDir(intent.dir)
         // agent は Agent が渡す任意の文字列。未知の値は既定(claude)に落とす。
         let kind = AgentKind(rawValue: (intent.agent ?? "").lowercased()) ?? .claude
+        // 危険モードスキップは **作成元カードの設定を引き継ぐ**。委譲したカードが承認なしで
+        // 走っているなら、その子も同じ前提でないと裏起動した瞬間に承認待ちで止まる。
+        // intent には載せない: Agent が intent ファイルを直接書けるので、載せると Agent 自身が
+        // `true` を書いて権限を昇格できてしまう。人が設定したカードから継ぐ形だけにする。
+        let danger = anchor?.dangerSkip ?? false
         guard let card = try? addCard(title: title, to: col, workingDirPath: dir,
+                                     dangerSkip: danger,
                                      agentKind: kind, model: intent.model) else { return nil }
         // 結線まで成功しなければ**カードを取り消す**。作成元とつながっていないカードを
         // 「委譲できた」と返すと、送り手は fleet_message で届かない相手に投げ続ける。

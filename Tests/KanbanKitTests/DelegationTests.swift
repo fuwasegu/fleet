@@ -57,6 +57,37 @@ struct DelegationTests {
         cleanup(creator, made)
     }
 
+    /// 危険モードスキップは作成元の設定を引き継ぐ。引き継がないと、承認なしで走っている
+    /// カードから委譲したカードだけが裏起動直後に承認待ちで止まってしまう。
+    @Test func inheritsDangerSkipFromTheCreator() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "作業中")
+        let creator = try store.addCard(title: "親", to: col, dangerSkip: true)
+
+        ChannelStore.appendDelegation(
+            BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "子"))
+        store.applyDelegations()
+
+        let made = try store.cards().first { $0.title == "子" }
+        #expect(made?.dangerSkip == true)
+        cleanup(creator, made)
+    }
+
+    /// 逆に、作成元が付けていなければ子にも付かない(勝手に権限が上がらない)。
+    @Test func doesNotGrantDangerSkipWhenTheCreatorHasNone() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "作業中")
+        let creator = try store.addCard(title: "親", to: col, dangerSkip: false)
+
+        ChannelStore.appendDelegation(
+            BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "子"))
+        store.applyDelegations()
+
+        let made = try store.cards().first { $0.title == "子" }
+        #expect(made?.dangerSkip == false)
+        cleanup(creator, made)
+    }
+
     /// 未知の agent 名は既定(claude)に落とす。綴り間違いで作成そのものを失敗させない。
     @Test func unknownAgentFallsBackToClaude() throws {
         let store = try makeStore()
