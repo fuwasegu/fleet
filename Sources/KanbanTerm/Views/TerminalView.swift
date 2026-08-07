@@ -232,6 +232,8 @@ final class TerminalSessions {
     // いないカード。hasSession はこれを見て false を返す ＝「使用中」判定だけを解除する。
     // view(for:) が新規セッションを張るときに取り除く(古いカード id を再利用したケース対策)。
     private var deadSessions: Set<UUID> = []
+    // 注入の末尾(CR 送信)タスク。カード毎に直列化するために保持する。
+    private var injectTails: [UUID: Task<Void, Never>] = [:]
     var onCardStateChange: ((UUID) -> Void)?               // A2A: Agent 状態変化を Hub へ中継
 
     func view(for cardID: UUID,
@@ -548,22 +550,34 @@ final class TerminalSessions {
     /// (overlay が表示中の可能性があるため)破棄せず、hasSession の判定だけを反転させる。
     private func markSessionDead(_ cardID: UUID) { deadSessions.insert(cardID) }
 
-    /// A2A: 生きているセッションへテキストを「入力」として送り込む。**送信はしない。**
-    ///
-    /// 末尾に付けるのは LF(0x0a)で、これは claude / codex どちらの TUI でも「改行の挿入」で
-    /// あって送信ではない(実測: claude 2.1.220 / codex-cli 0.145.0。送信は CR = 0x0d)。
-    /// この挙動は `MonitoredTerminalView` の Shift+Enter 実装(0x0a を送り既定の CR を抑止する)
-    /// と同じ前提に立っている。届いたメッセージは入力欄に載るだけで、人がカードを開いて
-    /// Enter を押すまで走らない。
-    ///
+    /// A2A: 生きているセッションへテキストを送り込み、**送信まで**する。
     /// 宛先が idle(プロンプト待ち)のときだけ Hub から呼ぶこと。
+    ///
+    /// 実測(claude 2.1.220):
+    /// - `LF`(0x0a) は入力欄に改行を入れるだけで **送信されない**。
+    /// - 本文と `CR`(0x0d) を**同一書き込み**で送ると、長文では貼り付けと見なされて CR が
+    ///   本文の一部として飲まれる(短い文字列では通るので、短文だけで確かめると誤る)。
+    /// - 本文を書いてから**別の書き込み**で CR を送ると、長い複数行でも送信される。
+    ///
+    /// なので本文と CR は分けて送る。本文中の LF は改行として入るので複数行はそのまま通る。
     @discardableResult
     func inject(_ text: String, into cardID: UUID) -> Bool {
         guard let term = views[cardID] else { return false }
-        let bytes = ArraySlice(Array((text + "\n").utf8))
-        term.send(source: term, data: bytes)
+        // 同じカードへ続けて注入されたとき、前回の CR より先に次の本文が入ると 2 通が
+        // 1 通に混ざる。カード毎に直列化して、前の送信が終わってから次を書く。
+        let previous = injectTails[cardID]
+        injectTails[cardID] = Task { @MainActor [weak term] in
+            await previous?.value
+            guard let term else { return }
+            term.send(source: term, data: ArraySlice(Array(text.utf8)))
+            try? await Task.sleep(for: .milliseconds(injectSubmitDelayMS))
+            term.send(source: term, data: ArraySlice([0x0d]))   // CR = 送信
+        }
         return true
     }
+
+    /// 本文を書いてから CR を送るまでの間隔。実測では 100ms でも通ったが余裕をとる。
+    private let injectSubmitDelayMS = 150
 
     /// カード削除時などにセッションを終了する。シェルだけでなくプロセスグループごと
     /// 終了させ、孫プロセス(claude / fleet-bridge)が launchd に里子化されて共有メモリへ
@@ -577,6 +591,8 @@ final class TerminalSessions {
                 killpg(pid, SIGTERM)
             }
         }
+        injectTails[cardID]?.cancel()   // 送信待ちの CR を残さない
+        injectTails[cardID] = nil
         views[cardID] = nil
         monitors[cardID] = nil
         deadSessions.remove(cardID)
