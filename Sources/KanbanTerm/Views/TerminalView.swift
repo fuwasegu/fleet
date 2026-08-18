@@ -23,6 +23,10 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     var onStateChange: ((UUID) -> Void)?       // 状態が変わったら通知(A2A: peers 更新 / キュー配信)
     var onProcessTerminated: ((UUID) -> Void)? // シェル終了を TerminalSessions へ中継(hasSession を false にするため)
 
+    // MARK: - hooks 由来の状態(agent-hook-state.json の監視)
+    private var hookStateWatcher: (any DispatchSourceFileSystemObject)?
+    private var hookStateDebounce: Task<Void, Never>?
+
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
         self.cardID = cardID
         self.context = context
@@ -110,6 +114,73 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
             }
         }
         return nil
+    }
+
+    // MARK: - hooks 由来の状態
+
+    /// `<fleetRoot>/cards/<cardID>/agent-hook-state.json` を監視する。fleet-bridge が
+    /// Claude の hooks(UserPromptSubmit/PreToolUse/PostToolUse/Stop/…)から都度アトミックに
+    /// 書き換えるファイルで、OSC タイトル/画面文字列のスクレイピング(AgentDetection)が CLI の
+    /// 表示変更で崩れても揺らがない、より確実な信号。既存のスクレイピングは削除せず併走させる。
+    ///
+    /// ファイルはまだ存在しない可能性がある(セッション起動直後、まだ1つも hook が発火して
+    /// いない)ため、ファイル自体ではなく**カードディレクトリ**を監視する(A2AChannelHub の
+    /// delegations 監視と同じ考え方: ディレクトリ監視は「直下の項目が増減/書き換わったとき」に
+    /// 発火するので、まだ無いファイルが後から生えるケースも自然に拾える)。
+    func startWatchingHookState() {
+        guard hookStateWatcher == nil else { return }
+        let dir = ChannelStore.cardDir(for: cardID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fd = open(dir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        src.setEventHandler { [weak self] in self?.scheduleHookStateRead() }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        hookStateWatcher = src
+        scheduleHookStateRead()   // 起動時点で既にファイルがあるケース(セッション再オープン等)も拾う
+    }
+
+    /// セッションを閉じるときに呼ぶ(`TerminalSessions.close`)。監視を放置するとリークする。
+    func stopWatchingHookState() {
+        hookStateWatcher?.cancel()
+        hookStateWatcher = nil
+        hookStateDebounce?.cancel()
+        hookStateDebounce = nil
+    }
+
+    /// 監視イベントはまとめて弾けるので 150ms デバウンスしてから読む(他の watcher と同じ扱い)。
+    private func scheduleHookStateRead() {
+        hookStateDebounce?.cancel()
+        hookStateDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            self.applyHookState()
+        }
+    }
+
+    private struct HookStateFile: Decodable {
+        let event: String
+        let state: String
+    }
+
+    /// hook 状態ファイルを読み、TUI 判定と同じ apply() 経路へ流す(unread/通知の扱いを一本化)。
+    ///
+    /// Blocked の precedence: 「信頼するフォルダですか?」等のダイアログは hooks を一切発火
+    /// させないため、Blocked の検知は今後も TUI(AgentDetection)側が権威。hook がそれ以外
+    /// (working/idle/unknown)を伝えてきても、現在の TUI 判定が Blocked と言っているならそれを
+    /// 優先し hook 側は無視する。hook 自身が blocked(Notification/PermissionRequest)を
+    /// 伝えてきた場合はそのまま適用する(TUI より弱めるべき状況が無いため)。
+    private func applyHookState() {
+        let url = ChannelStore.cardDir(for: cardID).appendingPathComponent("agent-hook-state.json")
+        guard let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(HookStateFile.self, from: data),
+              let hookState = AgentState(rawValue: file.state) else { return }
+        if hookState != .blocked, let (tuiState, question) = classify(), tuiState == .blocked {
+            apply(tuiState, question: question)
+            return
+        }
+        apply(hookState)
     }
 
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
@@ -263,6 +334,7 @@ final class TerminalSessions {
         term.onScan = { [weak monitor] in monitor?.rescan() }
         monitor.onStateChange = { [weak self] id in self?.onCardStateChange?(id) }
         monitor.onProcessTerminated = { [weak self] id in self?.markSessionDead(id) }
+        monitor.startWatchingHookState()   // hooks 由来の状態(agent-hook-state.json)を監視開始
         monitors[cardID] = monitor
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
@@ -353,6 +425,45 @@ final class TerminalSessions {
         return cfgURL.path
     }
 
+    /// Claude の hooks 設定を `<fleetRoot>/cards/<id>/claude-settings.json` に書き出し、
+    /// `claude --settings` へ渡すパスを返す。
+    ///
+    /// `--settings <file>` は「その起動だけに足す設定」で、ユーザー自身の `~/.claude/settings.json`
+    /// や project の `.claude/settings.json` とマージされる。実測(Claude Code 2.1.234): 同じ
+    /// イベントに両方の hook が定義されていれば**両方**実行される — なので Fleet はユーザーの
+    /// hooks/statusLine を一切上書きしない(このファイルには hooks キーしか書かない)。
+    ///
+    /// フックの実体は同梱の fleet-bridge(`--hook-event --card <id>`)。セッションの実イベント
+    /// (プロンプト送信・ツール実行・停止・終了・通知)を観測して `agent-hook-state.json` に
+    /// 書くだけの純観測フックで、stdout には何も出さず必ず 0 で終了する(セッションを乱さない)。
+    ///
+    /// 起動の**都度**書き直す: アプリが更新されるとバンドル内の fleet-bridge の絶対パスが
+    /// 変わるため、古いパスのまま固定してしまうと更新後に動かなくなる。
+    private static func writeClaudeSettingsConfig(cardID: UUID) -> String? {
+        guard let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") else { return nil }
+        let cardDir = ChannelStore.cardDir(for: cardID)
+        try? FileManager.default.createDirectory(at: cardDir, withIntermediateDirectories: true)
+        // --root は mcp.json と同じく明示する。アプリ側の ChannelStore.fleetRoot() は
+        // FLEET_ROOT を尊重するため、渡さないと「アプリは FLEET_ROOT を監視、hook は
+        // ~/.fleet に書く」という無言の不一致になり、状態が一切届かなくなる。
+        let hookCommand = "\(WorktreeService.shellQuote(helper.path)) --hook-event --card \(cardID.uuidString)"
+            + " --root \(WorktreeService.shellQuote(ChannelStore.fleetRoot().path))"
+        // 確認済み(UserPromptSubmit/PreToolUse/PostToolUse/Stop)+ 実測では未発火だが配線だけ
+        // しておく(SessionEnd/Notification/PermissionRequest。将来のバージョンで発火し得る)。
+        let events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop",
+                     "SessionEnd", "Notification", "PermissionRequest"]
+        var hooks: [String: Any] = [:]
+        for event in events {
+            hooks[event] = [["hooks": [["type": "command", "command": hookCommand]]]]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["hooks": hooks], options: [.prettyPrinted]) else {
+            return nil
+        }
+        let url = cardDir.appendingPathComponent("claude-settings.json")
+        guard (try? data.write(to: url)) != nil else { return nil }
+        return url.path
+    }
+
     /// エージェント種別に応じた起動コマンド文字列を組み立てる(シェルへ「入力」として送る)。
     /// カード毎にセッションを固定し、再オープン/再起動時に自動でそのセッションへ復帰する
     /// (履歴から手動で選ばなくてよい)。session id は UUID 相当の文字種のみ許可(注入防止)。
@@ -411,6 +522,10 @@ final class TerminalSessions {
                 // 打ち込むと端末の1行入力上限(MAX_CANON≈1024B)を超えて途中で止まるため。
                 let promptPath = writePromptFile(cardID: cardID)
                 cmd += " --append-system-prompt \"$(cat \(WorktreeService.shellQuote(promptPath)))\""
+                // hooks 経由の状態通知(TUI スクレイピングに依存しない、より確実な信号)。
+                if let settingsPath = Self.writeClaudeSettingsConfig(cardID: cardID) {
+                    cmd += " --settings \(WorktreeService.shellQuote(settingsPath))"
+                }
             } else {
                 NSLog("[Fleet] fleet-bridge helper not found; A2A tools unavailable for card \(cardID)")
             }
@@ -593,6 +708,7 @@ final class TerminalSessions {
         }
         injectTails[cardID]?.cancel()   // 送信待ちの CR を残さない
         injectTails[cardID] = nil
+        monitors[cardID]?.stopWatchingHookState()   // hooks 状態の監視を止める(リーク防止)
         views[cardID] = nil
         monitors[cardID] = nil
         deadSessions.remove(cardID)
