@@ -2,6 +2,11 @@
 
 タグの注記から抜粋(各バージョン1行)。新しい順。
 
+## v0.12.0
+- **カードの状態を Claude Code の hooks から受け取る**ようにした(TUI 依存の縮小)。起動時に `--settings` でカード専用の hook 設定を注入し、`UserPromptSubmit`/`PreToolUse`/`PostToolUse`→稼働中、`Stop`→完了 を同梱 fleet-bridge が状態ファイルへ書き、Fleet が監視して反映する。実セッションで `UserPromptSubmit→working … Stop→idle` の遷移を確認済み。`--settings` はユーザー自身の設定と**マージ**され(同一イベントでも両方発火)、`~/.claude/settings.json` は一切変更しない。フックは stdout に何も出さず必ず 0 で終了する純観測(exit 2 はセッションの動作をブロックしてしまうため)
+- **承認待ち(Blocked)は引き続き TUI 検知**。「このフォルダを信頼しますか」等のダイアログは hook が一切発火しないことを実測で確認したため、hook 状態が稼働中/完了でも画面が Blocked ならそちらを優先する
+- hook コマンドにも `--root` を明示。渡さないと FLEET_ROOT 使用時に「アプリは FLEET_ROOT を監視、hook は ~/.fleet に書く」という無言の不一致になる
+
 ## v0.11.2
 - **Claude が作業中でも Working にならない**のを修正。Claude Code 2.1.234 で稼働シグナルが同時に2つ変わっていた: OSC タイトルのスピナーが点字(⠋)から半円(◐◑◒◓)へ、フッタの `esc to interrupt` は文字列ごと削除(バイナリ内 0 件)。Fleet はその両方に依存していたため丸ごと判定不能になっていた。実機の TUI を pty で捕捉して実測し、タイトルは点字と半円の両方を受け付け、本文側は動詞リストではなく**形**(スピナー字形+動詞+`…`、`· Ns ·` / `↓N tokens`)で照合する下部3行のルールに置き換えた。Codex 側(点字)は変更なし
 

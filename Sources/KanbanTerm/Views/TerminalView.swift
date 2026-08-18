@@ -443,7 +443,11 @@ final class TerminalSessions {
         guard let helper = Bundle.main.url(forAuxiliaryExecutable: "fleet-bridge") else { return nil }
         let cardDir = ChannelStore.cardDir(for: cardID)
         try? FileManager.default.createDirectory(at: cardDir, withIntermediateDirectories: true)
+        // --root は mcp.json と同じく明示する。アプリ側の ChannelStore.fleetRoot() は
+        // FLEET_ROOT を尊重するため、渡さないと「アプリは FLEET_ROOT を監視、hook は
+        // ~/.fleet に書く」という無言の不一致になり、状態が一切届かなくなる。
         let hookCommand = "\(WorktreeService.shellQuote(helper.path)) --hook-event --card \(cardID.uuidString)"
+            + " --root \(WorktreeService.shellQuote(ChannelStore.fleetRoot().path))"
         // 確認済み(UserPromptSubmit/PreToolUse/PostToolUse/Stop)+ 実測では未発火だが配線だけ
         // しておく(SessionEnd/Notification/PermissionRequest。将来のバージョンで発火し得る)。
         let events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop",
