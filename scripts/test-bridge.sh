@@ -194,4 +194,40 @@ grep -q 'gpt-5-codex'          "$DFILE" || fail "model not persisted in delegati
 # チャンネル dir を勝手に作っていないこと(無所属のまま)
 [ -d "$ROOT4/channels" ] && fail "unconnected card must not create a channel dir from the bridge" || true
 
+
+# --- hook イベントモード(--hook-event): Claude の hooks から直接起動されるモード。
+#     セッションの中で動くプロセスなので、何が起きても stdout には何も書かず exit 0 で
+#     終わらなければならない(stdout はモデルへのコンテキストになり得る/非0終了はセッションに
+#     影響し得る)。 ---
+ROOT5="$(mktemp -d)"
+CARD5="66666666-6666-6666-6666-666666666666"
+mkdir -p "$ROOT5/cards/$CARD5"
+# Stop イベントの実測フィールド一式(仕様の「Verified ground truth」どおり)。
+STOP_JSON='{"hook_event_name":"Stop","background_tasks":[],"cwd":"/tmp","effort":"medium","last_assistant_message":"done","permission_mode":"default","prompt_id":"p1","session_crons":[],"session_id":"sess-abc123","stop_hook_active":false,"transcript_path":"/tmp/transcript.jsonl"}'
+HOOK_OUT="$(mktemp)"
+set +e
+printf '%s' "$STOP_JSON" | "$BRIDGE" --hook-event --card "$CARD5" --root "$ROOT5" > "$HOOK_OUT"
+HOOK_STATUS=$?
+set -e
+[ "$HOOK_STATUS" = "0" ] || fail "hook-event mode exited non-zero ($HOOK_STATUS) on a Stop event"
+[ -s "$HOOK_OUT" ] && fail "hook-event mode wrote to stdout (must stay silent inside the user's session)"
+STATE_FILE="$ROOT5/cards/$CARD5/agent-hook-state.json"
+[ -f "$STATE_FILE" ] || fail "hook-event mode did not write agent-hook-state.json for a Stop event"
+grep -q '"state":"idle"' "$STATE_FILE" || fail "Stop event should map to state idle (got: $(cat "$STATE_FILE"))"
+grep -q '"event":"Stop"' "$STATE_FILE" || fail "state file missing the source event name"
+grep -q '"sessionID":"sess-abc123"' "$STATE_FILE" || fail "state file missing sessionID"
+
+# 壊れた JSON でも exit 0・stdout 無し・状態ファイルを書かないこと(純観測: 失敗は握って諦める)。
+ROOT6="$(mktemp -d)"
+CARD6="77777777-7777-7777-7777-777777777777"
+mkdir -p "$ROOT6/cards/$CARD6"
+BAD_OUT="$(mktemp)"
+set +e
+printf 'not valid json{{{' | "$BRIDGE" --hook-event --card "$CARD6" --root "$ROOT6" > "$BAD_OUT"
+BAD_STATUS=$?
+set -e
+[ "$BAD_STATUS" = "0" ] || fail "hook-event mode exited non-zero ($BAD_STATUS) on malformed JSON"
+[ -s "$BAD_OUT" ] && fail "hook-event mode wrote to stdout on malformed JSON"
+[ -f "$ROOT6/cards/$CARD6/agent-hook-state.json" ] && fail "malformed JSON should not produce a state file" || true
+
 echo "fleet-bridge protocol test: OK"

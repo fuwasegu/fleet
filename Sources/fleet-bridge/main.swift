@@ -35,6 +35,55 @@ let fleetRoot: URL = rootOverride.isEmpty
     ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".fleet")
     : URL(fileURLWithPath: rootOverride)
 
+// MARK: - Hook イベントモード(--hook-event)
+//
+// `fleet-bridge --hook-event --card <uuid>` は Claude Code の hooks(UserPromptSubmit/
+// PreToolUse/PostToolUse/Stop/SessionEnd/Notification/PermissionRequest)から起動される。
+// これはユーザーの Claude セッション**の中**で実行されるプロセスなので、絶対に
+// セッションを乱してはいけない: 標準出力には何も書かない(hook の stdout はモデルへの
+// コンテキストになり得る/exit 2 等が Claude 側の挙動に影響する)、必ず 0 で終了する
+// (何が起きても — JSON が壊れている、カードディレクトリが無い、書き込めない —
+// クラッシュ・非0終了・stdout 出力のいずれも起こさず黙って諦める)。
+// 通常の MCP サーバ挙動(このファイル下部の JSON-RPC ループ)は --hook-event が無いときは
+// 一切変えない。
+if CommandLine.arguments.contains("--hook-event") {
+    writeHookEventState(cardID: cardID, fleetRoot: fleetRoot)
+    exit(0)
+}
+
+/// stdin から hook イベント JSON を読み、`cards/<cardID>/agent-hook-state.json` を
+/// アトミックに書く(Data(options:.atomic) は同一ディレクトリに一時ファイルを書いてから
+/// rename するため、読み手が部分書き込みを見ることはない)。失敗はすべて握って無視する。
+///
+/// イベント名 → 状態の対応は KanbanKit.AgentHookEvent.state(forEventName:) と同じもの
+/// (テストはそちらで KanbanKitTests として持つ)。bridge は KanbanKit にリンクできない
+/// (SECURITY item 1 で使う validUUID 等と違い、こちらは AgentLaunch.normalizedModel の
+/// 事情と同じ)ため、手動同期した複製をここに置く。対応を変えるときは両方直すこと。
+func writeHookEventState(cardID: String, fleetRoot: URL) {
+    guard !cardID.isEmpty else { return }   // --card が不正/未指定 = 書かない
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    guard let obj = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
+          let eventName = obj["hook_event_name"] as? String else { return }
+    let state: String
+    switch eventName {
+    case "UserPromptSubmit", "PreToolUse", "PostToolUse": state = "working"
+    case "Stop": state = "idle"
+    case "Notification", "PermissionRequest": state = "blocked"
+    case "SessionEnd": state = "unknown"
+    default: return   // 未知のイベント名は無視(状態を書かない)
+    }
+    let cardDir = fleetRoot.appendingPathComponent("cards/\(cardID)", isDirectory: true)
+    guard (try? FileManager.default.createDirectory(at: cardDir, withIntermediateDirectories: true)) != nil else { return }
+    var payload: [String: Any] = [
+        "event": eventName,
+        "state": state,
+        "at": Int(Date().timeIntervalSince1970)
+    ]
+    if let sessionID = obj["session_id"] as? String { payload["sessionID"] = sessionID }
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+    try? data.write(to: cardDir.appendingPathComponent("agent-hook-state.json"), options: .atomic)
+}
+
 // MARK: - パス解決(毎操作で最新の binding を読む)
 
 struct Binding: Decodable { let channel: String?; let name: String? }
