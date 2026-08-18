@@ -127,8 +127,21 @@ public enum AgentDetection {
 
     // MARK: - Claude Code ルール
 
-    static let brailleTitle = "^[\u{2800}-\u{28FF}]"      // 点字スピナー先頭 = 稼働
+    static let brailleTitle = "^[\u{2800}-\u{28FF}]"      // 点字スピナー先頭 = 稼働(Codex は現在もこれ)
+    static let circleTitle = "^[\u{25D0}-\u{25D3}]"       // ◐◑◒◓ 先頭 = 稼働(Claude 2.1.x の新スピナー)
     static let starTitle = "^\u{2733}"                    // ✳ 先頭 = 待機
+
+    // FIX (Claude 2.1.234 回帰): OSC タイトルのスピナーが点字(⠋⠙⠹…)から
+    // 円形スピナー ◐◑◒◓(U+25D0-25D3)へ変更され、working_title(brailleTitle のみ)が
+    // 死んだシグナルになっていた。さらに稼働中フッタの "esc to interrupt" 文字列が
+    // バイナリから完全に削除されており(strings 検索でヒット0件)、working_footer も
+    // 同時に死んでいた=このバージョンの Claude では稼働検知が丸ごと機能しなくなっていた。
+    // 対策: (1) working_title は点字/円形の両方にマッチさせる(Codex は引き続き点字のみ)。
+    // (2) working_footer を本文ステータス行の形状ベース検知(working_status_line)に置換し、
+    // "esc to interrupt" は後方互換のため残す。ステータス行の実例:
+    //   "✶Percolating… " / "✳Cooking… (running stop hooks… 0/2 · 2s · ↓121 tokens)"
+    static let statusLineVerbEllipsis = "^[^\\sA-Za-z0-9][A-Z][a-z]+…"
+    static let statusLineParenthetical = "(·\\s*\\d+s\\s*·|↓\\d+\\s*tokens)"
 
     static let claudeRules: [Rule] = [
         // transcript ビューア表示中は状態を変えない
@@ -159,10 +172,17 @@ public enum AgentDetection {
               .any([.all([.contains(["do you want to"]), .any([.contains(["yes"]), .contains(["❯"])])]),
                     .all([.contains(["would you like to"]), .any([.contains(["yes"]), .contains(["❯"])])]),
                     .contains(["waiting for permission"])])),
-        // 稼働: タイトルの点字スピナー
-        .init("working_title", .working, 800, .oscTitle, .regex(brailleTitle)),
-        // 稼働: フッタ "esc to interrupt"
-        .init("working_footer", .working, 700, .whole, .contains(["esc to interrupt"])),
+        // 稼働: タイトルのスピナー(点字=旧バージョン、円形◐◑◒◓=Claude 2.1.x)
+        .init("working_title", .working, 800, .oscTitle,
+              .any([.regex(brailleTitle), .regex(circleTitle)])),
+        // 稼働: 本文ステータス行(スピナー記号+動詞+…、または "· <n>s ·"/"↓<n> tokens" の
+        // 括弧書き)。Claude の動詞は数十種類あり頻繁に変わるため、個々の単語ではなく
+        // 形状でマッチさせる。stale なスクロールバックに引きずられないよう .whole ではなく
+        // 下部3行の小さな窓のみ見る。"esc to interrupt" は旧バージョン後方互換で残す。
+        .init("working_status_line", .working, 700, .bottom(3),
+              .any([.lineRegex(statusLineVerbEllipsis),
+                    .regex(statusLineParenthetical),
+                    .contains(["esc to interrupt"])])),
         // 待機: タイトル ✳
         .init("idle_star", .idle, 300, .oscTitle, .regex(starTitle)),
         // 待機: 入力プロンプト行 ❯(選択フォームでない)+ Claude TUI が実在する証拠。

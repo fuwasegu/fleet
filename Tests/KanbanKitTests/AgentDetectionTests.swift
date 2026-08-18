@@ -181,6 +181,52 @@ struct AgentDetectionTests {
         #expect(c("", ["… (esc to interrupt)"]) == .working)
     }
 
+    @Test func claudeCircleSpinnerTitleIsWorking() {
+        // Claude 2.1.234 回帰: OSC タイトルのスピナーが点字から円形 ◐◑◒◓ へ変更された。
+        #expect(c("\u{25D0} Claude Code", []) == .working)
+        #expect(c("\u{25D1} Count from 1 to 60", []) == .working)
+    }
+
+    @Test func claudeBrailleSpinnerTitleStillWorking() {
+        // 旧バージョンの点字スピナーも引き続き稼働と判定できる(後方互換)。
+        #expect(c("\u{280B} Claude Code", []) == .working)
+    }
+
+    @Test func claudeStatusLineIsWorking() {
+        // Claude 2.1.234 回帰: フッタの "esc to interrupt" が削除されたため、
+        // 本文のステータス行(スピナー記号+動詞+…、または "· <n>s ·"/"↓<n> tokens")で検知する。
+        #expect(c("", ["assistant output", "\u{2736}Percolating\u{2026} "]) == .working)
+        #expect(c("", ["\u{2733}Cooking\u{2026} (running stop hooks\u{2026} 0/2 \u{00B7} 2s \u{00B7} \u{2193}121 tokens)"]) == .working)
+    }
+
+    @Test func claudeIdleTitleStillIdle() {
+        // Claude 2.1.234 回帰の確認: アイドル時のタイトルは引き続き ✳ 先頭のまま。
+        let lines = [
+            "assistant output",
+            "\u{256D}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256E}",
+            "\u{2502} >                           \u{2502}",
+            "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256F}",
+            "\u{276F} ",
+        ]
+        #expect(c("\u{2733} Claude Code", lines) == .idle)
+    }
+
+    @Test func welcomeScreenIsNotWorking() {
+        // Claude のウェルカム/アイドル画面には装飾的な ✳/✢ グリフや入力欄はあるが、
+        // 「スピナー+動詞+…」の形状を持つステータス行は無い。稼働と誤判定してはならない。
+        let lines = [
+            "\u{2733} Welcome to Claude Code!",
+            "",
+            "  \u{2622} Try asking or instructing Claude to edit your files...",
+            "  /help for help, /status for your current setup",
+            "",
+            "\u{256D}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256E}",
+            "\u{2502} >                           \u{2502}",
+            "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256F}",
+        ]
+        #expect(c("\u{2733} Claude Code", lines) != .working)
+    }
+
     @Test func claudeUnknownKeepsState() {
         #expect(c("", ["just some normal output line"]) == nil)
     }
