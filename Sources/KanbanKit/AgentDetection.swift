@@ -151,9 +151,22 @@ public enum AgentDetection {
         // フォルダ信頼の確認(新しい作業ディレクトリで claude を起動した初回に必ず出る)。
         // 裏起動したカードはここで必ず止まるので、盤面に「人間が必要」と出すために Blocked にする。
         // 起動直後で画面がまだスクロールしておらず、ダイアログは画面上部に出る → .screen で見る。
+        //
+        // FIX (回帰: 終了しても Blocked に張り付く): 質問文の部分文字列だけを見ていると、
+        // ユーザーが答えた**後**にも "Yes, I trust this folder✔" という確認済みの1行が
+        // スクロールバックに残り続け(実測: claude 2.1.234)、"trust this folder" という
+        // 語自体は消えない。そのため .screen(可視画面全体)を見るこのルールが優先度960で
+        // 最後まで勝ち続け、ターンが終わって Idle に戻ったカードがずっと Blocked のままに
+        // なっていた。対策: 質問文の存在に加えて、選択 UI がまだ生きている証拠(「2. No」の
+        // メニュー行、またはフッタの "Enter to confirm"/"Esc to cancel")を必須にする。
+        // これらは回答すると同時に消える(残るのは確認済みの1行だけ)ため、回答後の残留テキスト
+        // では二度とマッチしなくなる。
         .init("claude_trust_folder", .blocked, 960, .screen,
-              .containsAny(["trust this folder",
-                            "is this a project you created or one you trust"])),
+              .all([.containsAny(["trust this folder",
+                                  "is this a project you created or one you trust"]),
+                    .any([.lineRegex("(?i)^\\s*❯?\\s*2\\.\\s*no\\b"),
+                          .contains(["enter to confirm"]),
+                          .contains(["esc to cancel"])])])),
         // bash 権限プロンプト(番号/❯ メニュー付き)。タイトルにスピナーが残っていても Blocked 優先。
         .init("bash_permission", .blocked, 950, .whole,
               .all([.contains(["do you want to proceed?"]),

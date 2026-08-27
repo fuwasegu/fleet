@@ -2,6 +2,10 @@
 
 タグの注記から抜粋(各バージョン1行)。新しい順。
 
+## v0.12.1
+- **ターン終了が Blocked と判定される**のを修正。`Stop`(ターン完了)の hook が届いたときは TUI の blocked 判定で上書きしないようにした。承認/信頼ダイアログはターン**進行中**にしか出ないため、`Stop` は「待ちではない」ことの積極的な証拠になる(作業中イベントでは従来どおり TUI の blocked を優先する)
+- 信頼プロンプトのルールが**応答後も張り付く**のを修正。従来は "trust this folder" の文字列があるだけで Blocked にしていたが、応答後も確認行が画面に残るため復帰できなかった。「2. No」行や "Enter to confirm"/"Esc to cancel" のような**応答すると消える要素**を併せて要求するようにした
+
 ## v0.12.0
 - **カードの状態を Claude Code の hooks から受け取る**ようにした(TUI 依存の縮小)。起動時に `--settings` でカード専用の hook 設定を注入し、`UserPromptSubmit`/`PreToolUse`/`PostToolUse`→稼働中、`Stop`→完了 を同梱 fleet-bridge が状態ファイルへ書き、Fleet が監視して反映する。実セッションで `UserPromptSubmit→working … Stop→idle` の遷移を確認済み。`--settings` はユーザー自身の設定と**マージ**され(同一イベントでも両方発火)、`~/.claude/settings.json` は一切変更しない。フックは stdout に何も出さず必ず 0 で終了する純観測(exit 2 はセッションの動作をブロックしてしまうため)
 - **承認待ち(Blocked)は引き続き TUI 検知**。「このフォルダを信頼しますか」等のダイアログは hook が一切発火しないことを実測で確認したため、hook 状態が稼働中/完了でも画面が Blocked ならそちらを優先する

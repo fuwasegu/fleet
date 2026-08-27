@@ -81,10 +81,47 @@ struct AgentDetectionTests {
     @Test func claudeTrustFolderIsBlockedWhenGapsAreControlCharsNotSpaces() {
         // 実測: SwiftTerm のバッファは書き込まれていないセルを NUL で返すため、語間が空白では
         // なく制御文字になる。素の contains は当たらず Unknown のままだった(実バグの回帰)。
+        //
+        // NOTE: 元々このテストは質問文 + "1. Yes" のメニュー行だけで Blocked を期待していた。
+        // それはまさに今回の回帰(応答済みの信頼プロンプトに Blocked が張り付く)を生んだ
+        // 判定条件そのもの(質問文の部分文字列だけで即 Blocked)を検証してしまっていたので、
+        // ライブダイアログの証拠("2. No" のメニュー行、NUL 区切りで維持)を追加して更新した。
+        // NUL 区切りの正規化そのものを見る意図は変わっていない。
         let nul = "\u{0}"
         let screen = ["Quick\(nul)safety\(nul)check:\(nul)Is\(nul)this\(nul)a\(nul)project\(nul)you\(nul)created\(nul)or\(nul)one\(nul)you\(nul)trust?",
-                      "❯\(nul)1.\(nul)Yes,\(nul)I\(nul)trust\(nul)this\(nul)folder"]
+                      "❯\(nul)1.\(nul)Yes,\(nul)I\(nul)trust\(nul)this\(nul)folder",
+                      "\(nul)\(nul)2.\(nul)No,\(nul)exit"]
         #expect(AgentDetection.classify(kind: .claude, title: "", lines: [], screen: screen) == .blocked)
+    }
+
+    @Test func trustPromptActiveIsBlocked() {
+        // claude 2.1.234 の実画面(信頼ダイアログが表示中)。選択メニューとフッタが
+        // 揃っているので Blocked と判定できる。
+        let screen = [
+            "Do you trust the files in this folder?",
+            "❯ 1. Yes, I trust this folder",
+            "  2. No, exit",
+            "Enter to confirm · Esc to cancel",
+        ]
+        #expect(AgentDetection.classify(kind: .claude, title: "", lines: [], screen: screen) == .blocked)
+    }
+
+    @Test func answeredTrustPromptIsNotBlocked() {
+        // 回帰の本体: claude 2.1.234 の実画面(信頼ダイアログに回答した後)。回答すると
+        // 選択メニューとフッタは消えるが、確認済みの1行 "Yes, I trust this folder✔" だけは
+        // スクロールバックに残り続ける。この行の "trust this folder" にだけ反応すると、
+        // ターンが終わって通常の Idle 画面に戻っていてもカードが Blocked に張り付く。
+        let screen = [
+            "Yes, I trust this folder✔",
+            "assistant output",
+            String(repeating: "─", count: 40),
+            "❯ ",
+            "? for shortcuts",
+        ]
+        // idle_caret(優先度250)は .bottom(12) = `lines` 窓を見るので、実運用(TerminalView)と
+        // 同じく screen と同じ内容を lines にも渡す(.screen 専用ルールが `lines: []` のまま
+        // 先に確定していた既存フィクスチャと異なり、ここは idle まで判定が進む必要があるため)。
+        #expect(AgentDetection.classify(kind: .claude, title: "", lines: screen, screen: screen) == .idle)
     }
 
     @Test func normalizeCollapsesControlCharRunsIntoSingleSpaces() {

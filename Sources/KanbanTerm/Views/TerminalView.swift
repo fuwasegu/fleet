@@ -171,12 +171,26 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// (working/idle/unknown)を伝えてきても、現在の TUI 判定が Blocked と言っているならそれを
     /// 優先し hook 側は無視する。hook 自身が blocked(Notification/PermissionRequest)を
     /// 伝えてきた場合はそのまま適用する(TUI より弱めるべき状況が無いため)。
+    ///
+    /// ただし `Stop` イベントだけは例外で、TUI-blocked override を経由**しない**。
+    /// 権限/信頼プロンプトはターンの進行中(または最初のターンが始まる前)にしか現れ得ない
+    /// UI で、`Stop` は Claude が1ターンを完全に終えたときにしか発火しない。つまり
+    /// `Stop` が届いた事実そのものが「今はダイアログ待ちではない」という積極的な証拠になる。
+    /// この場合に TUI 判定を再度問い合わせて Blocked を勝たせてしまうと、ターン終了後も
+    /// 画面に残り続ける確認済みプロンプトの残留テキスト(例: 信頼ダイアログの
+    /// "Yes, I trust this folder✔")に引きずられてカードが Blocked に張り付き続けてしまう
+    /// (実バグ: v0.12.0 で "終了が Blocked 判定になる" として報告された回帰)。
+    /// 一方、`UserPromptSubmit`/`PreToolUse`/`PostToolUse` はターン進行中に発火するイベントで、
+    /// その最中に権限プロンプトが実際に出ることがあり得るため、そちらは従来通り TUI 側を
+    /// 権威として扱う(= override を維持する)。この Stop の特別扱いを削って上の分岐に
+    /// 統合しないこと。それは正にこの回帰を再導入する変更になる。
     private func applyHookState() {
         let url = ChannelStore.cardDir(for: cardID).appendingPathComponent("agent-hook-state.json")
         guard let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(HookStateFile.self, from: data),
               let hookState = AgentState(rawValue: file.state) else { return }
-        if hookState != .blocked, let (tuiState, question) = classify(), tuiState == .blocked {
+        if file.event != "Stop", hookState != .blocked,
+           let (tuiState, question) = classify(), tuiState == .blocked {
             apply(tuiState, question: question)
             return
         }
