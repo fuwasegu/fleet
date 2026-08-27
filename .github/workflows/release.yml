@@ -53,6 +53,7 @@ jobs:
           set -o pipefail
           xcodebuild -project Fleet.xcodeproj -scheme Fleet -configuration Release \
             -derivedDataPath build/dd \
+            -skipPackagePluginValidation \
             MARKETING_VERSION=${{ steps.ver.outputs.version }} \
             CODE_SIGNING_ALLOWED=NO \
             build

@@ -34,6 +34,7 @@ jobs:
             -destination 'platform=macOS' \
             -only-testing:KanbanKitTests \
             -derivedDataPath build/dd \
+            -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
 
       - name: fleet-bridge MCP protocol test
