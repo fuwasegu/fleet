@@ -27,6 +27,30 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     private var hookStateWatcher: (any DispatchSourceFileSystemObject)?
     private var hookStateDebounce: Task<Void, Never>?
 
+    /// hooks から見た「ターンが進行中かどうか」の構造的バックストップ(v0.12.1 のフラッピング
+    /// 修正の続き)。v0.12.1 は `Stop` が届いた**瞬間**だけ idle を強制適用したが、その後さらに
+    /// 端末出力(ユーザーのカスタム statusline 等)が来て TUI 判定が再実行されると、確認済みの
+    /// 残留プローズに `weak_permission` 等が再度反応して Blocked に戻ってしまう(=Done と
+    /// Blocked を行き来する)。権限/信頼ダイアログは「ターン進行中」または「最初のターンが
+    /// 始まる前」にしか出現し得ないという事実を使い、Stop 後にターンが動いていないと分かって
+    /// いる間は TUI 判定側の Blocked を丸ごと握りつぶす(他の状態には一切影響しない)。
+    ///
+    /// - `nil`: まだ一度も `Stop` を観測していない(セッション起動直後、または hooks が
+    ///   一つも届いていない)。信頼フォルダ確認ダイアログは最初のターンが始まる**前**に
+    ///   出現するため、ここで Blocked を握りつぶしてしまうと起動直後の信頼ダイアログを
+    ///   一生検知できなくなる。よって `nil` の間は抑止を一切効かせない(=デフォルトは
+    ///   安全側=何もしない)。抑止は「`Stop` を実際に観測した後」だけの話であって、
+    ///   デフォルトの挙動ではない。
+    /// - `true`: 直近の hook イベントが `Stop` 以外(`UserPromptSubmit`/`PreToolUse`/
+    ///   `PostToolUse` など、ツール系イベントを含む)= ターン進行中。TUI Blocked をそのまま通す。
+    /// - `false`: 直近の hook イベントが `Stop` = ターンは終わっている。TUI Blocked を抑止する。
+    ///
+    /// Codex カードには hooks が一切配線されない(`agent-hook-state.json` 自体が生成されない)
+    /// ため `applyHookState()` は常に早期 return し、この値は Codex カードでは一生 `nil` の
+    /// ままになる = 抑止は Codex では原理的に発生しない。念のため `classify()` 側でも
+    /// `agentKind == .claude` を明示のガードとして重ねている。
+    private var turnRunning: Bool?
+
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
         self.cardID = cardID
         self.context = context
@@ -62,6 +86,14 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         let screen = screenLines()
         guard let state = AgentDetection.classify(kind: agentKind, title: latestTitle,
                                                  lines: lines, screen: screen) else { return nil }
+        // 構造的バックストップ: `Stop` を観測済み(= 今ターンは進行していないと分かっている)
+        // 間は、TUI 側が Blocked と判定してもそれを採用しない(権限/信頼ダイアログはターン
+        // 進行中にしか出現しない)。`turnRunning == nil`(Stop 未観測。起動直後の信頼ダイアログ
+        // を検知する必要がある期間)や Codex(hooks が無いので turnRunning は常に nil)では
+        // 抑止しない。他の状態(working/idle/unknown)には一切影響しない。
+        if state == .blocked, agentKind == .claude, turnRunning == false {
+            return nil
+        }
         // 問いは画面全体から探す(起動直後の全画面ダイアログは下部窓の外に出る)。
         let question = (state == .blocked) ? Self.extractQuestion(from: screen) : nil
         return (state, question)
@@ -189,6 +221,11 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         guard let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(HookStateFile.self, from: data),
               let hookState = AgentState(rawValue: file.state) else { return }
+        // `turnRunning` バックストップ(上のプロパティ宣言のコメント参照)の更新。`Stop` だけが
+        // ターン終了を意味し、それ以外(`UserPromptSubmit`/`PreToolUse`/`PostToolUse` などの
+        // ツール系イベントを含む全て)はターン進行中の証拠として扱う。`classify()` より前に
+        // 更新しておくことで、直後のこの呼び出し内・および以後の TUI 再評価すべてに反映される。
+        turnRunning = (file.event != "Stop")
         if file.event != "Stop", hookState != .blocked,
            let (tuiState, question) = classify(), tuiState == .blocked {
             apply(tuiState, question: question)

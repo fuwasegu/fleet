@@ -268,6 +268,53 @@ struct AgentDetectionTests {
         #expect(c("", ["just some normal output line"]) == nil)
     }
 
+    // MARK: weak_permission 誤検知(実バグ: 完了ターンが Blocked になる/Blocked と Done を
+    // 行ったり来たりする)
+
+    /// claude 2.1.263 の実画面(通常ターン終了時)をそのまま fixture 化したもの。
+    /// 待機中の入力欄には常に "❯" が居ることを確認するための base。
+    private static let idleTurnEndScreen = [
+        "❯ read the file README.md and tell me its first heading, one line only",
+        "  Searched for 1 pattern, read 1 file, ran 1 shell command",
+        "⏺ Fleet — an HTML <h1 align=\"center\">Fleet</h1> at README.md:5 (the first",
+        "  Markdown-syntax heading is ## Install).",
+        "✻ Brewed for 9s · done 12:00 AM",
+        String(repeating: "─", count: 82),
+        "❯",
+        String(repeating: "─", count: 82),
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ]
+
+    @Test func assistantProseWithQuestionIsNotBlocked() {
+        // 回帰の本体: 完了したターンの最後の一文が "Do you want to ...?" になっただけで
+        // Blocked に化けていた(待機中の入力欄には常に "❯" が居るため)。実際には選択メニューも
+        // 何も出ていない単なる地の文なので、Idle のままでなければならない。
+        var lines = Self.idleTurnEndScreen
+        lines[2] = "⏺ Done. Do you want to proceed with the release?"
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func assistantProseWouldYouLikeIsNotBlocked() {
+        var lines = Self.idleTurnEndScreen
+        lines[2] = "⏺ Would you like to see the diff?"
+        #expect(c("", lines) == .idle)
+    }
+
+    @Test func realPermissionMenuStillBlocked() {
+        // weak_permission を行アンカーの選択メニュー必須に絞っても、本物の権限プロンプト
+        // (質問文 + ❯ 1. Yes / 2. No の選択メニュー)は引き続き Blocked と判定できること。
+        let lines = [
+            "⏺ Do you want to enable this experimental feature?",
+            "❯ 1. Yes",
+            "  2. No",
+        ]
+        #expect(c("", lines) == .blocked)
+    }
+
+    @Test func waitingForPermissionStillBlocked() {
+        #expect(c("", ["waiting for permission to run this command"]) == .blocked)
+    }
+
     @Test func claudeTranscriptViewerKeepsState() {
         #expect(c("\u{2733} x", ["showing detailed transcript", "ctrl+o to toggle"]) == nil)
     }
