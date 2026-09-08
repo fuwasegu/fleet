@@ -180,10 +180,28 @@ public enum AgentDetection {
         .init("selection_form", .blocked, 930, .whole,
               .all([.contains(["esc to cancel"]),
                     .containsAny(["enter to select", "enter to confirm", "arrow keys", "to navigate", "↑/↓", "↑↓"])])),
-        // 弱い権限シグナル
-        .init("weak_permission", .blocked, 900, .whole,
-              .any([.all([.contains(["do you want to"]), .any([.contains(["yes"]), .contains(["❯"])])]),
-                    .all([.contains(["would you like to"]), .any([.contains(["yes"]), .contains(["❯"])])]),
+        // 弱い権限シグナル。
+        //
+        // FIX (実バグ: 完了ターンが Blocked になる/Blocked と Done を行ったり来たりする):
+        // 旧実装は「"do you want to"/"would you like to" のプローズ + 画面のどこかに素の
+        // "yes" か "❯" がある」を条件にしていた。だが待機中の入力欄には常に "❯" が居るため、
+        // 実質「質問っぽい文が画面のどこかにあれば Blocked」に堕ちていた。Claude はターンの
+        // 締めくくりに "Do you want to proceed with X?" のような一文を普通に書くため、
+        // 完了したターンがそのまま Blocked に化けていた(かつ region が .whole=画面全体だった
+        // ため、ずっと上の方にある地の文でも拾ってしまっていた)。
+        // 対策: (1) 素の "yes"/"❯" 部分文字列ではなく、他の権限系ルール(bash_permission /
+        // generic_permission)と同じ形の「行頭アンカーの選択メニュー行」を要求する
+        // (プローズの一文だけでは絶対に成立しない)。(2) 領域を .whole から .bottom(8) に
+        // 狭め、実際に生きているプロンプトが描かれる画面下部だけを見る。
+        .init("weak_permission", .blocked, 900, .bottom(8),
+              .any([.all([.contains(["do you want to"]),
+                          .any([.lineRegex("(?i)^\\s*❯?\\s*\\d+\\.\\s*yes\\b"),
+                                .lineRegex("(?i)^\\s*\\d+\\.\\s*no\\b"),
+                                .lineRegex("(?i)^\\s*❯\\s*yes\\b")])]),
+                    .all([.contains(["would you like to"]),
+                          .any([.lineRegex("(?i)^\\s*❯?\\s*\\d+\\.\\s*yes\\b"),
+                                .lineRegex("(?i)^\\s*\\d+\\.\\s*no\\b"),
+                                .lineRegex("(?i)^\\s*❯\\s*yes\\b")])]),
                     .contains(["waiting for permission"])])),
         // 稼働: タイトルのスピナー(点字=旧バージョン、円形◐◑◒◓=Claude 2.1.x)
         .init("working_title", .working, 800, .oscTitle,
