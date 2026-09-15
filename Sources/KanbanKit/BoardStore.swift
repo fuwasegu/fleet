@@ -321,7 +321,8 @@ public struct BoardStore {
     /// create_card / move_card のみ(破壊操作なし)。move はチャンネル所属カードに限定。
     /// 適用済み id は記録し、成否に関わらず再適用しない(リトライ暴走防止)。
     /// 戻り値は**このパスで新しく作られたカード**(裏起動の対象)。理由は `applyCardIntents` と同じ。
-    @discardableResult
+    /// `@discardableResult` は付けない: 捨てると呼び出し元は新規カードを裏起動できず、人が
+    /// ターミナルを開くまで Agent が動かない(実際に起きた回帰)。呼び出し側で必ず受け取ること。
     public func applyBoardIntents(for channelID: UUID) -> [Card] {
         var created: [Card] = []
         let intents = ChannelStore.boardIntents(for: channelID)
@@ -402,7 +403,9 @@ public struct BoardStore {
     ///
     /// 戻り値は**このパスで新しく作られたカード**。呼び出し側はこれだけを裏で起動する
     /// (全カードを裏起動するとトークンを勝手に焼くので、「人が意図した委譲の結果」に限る)。
-    @discardableResult
+    /// `@discardableResult` は付けない: 捨てると裏起動の取りこぼしが起きる(実際に起きた回帰。
+    /// `claimDelegations` はファイル rename による破壊的な take なので、拾った側が結果を
+    /// 使わないとその委譲カードは二度と裏起動されない)。呼び出し側で必ず受け取ること。
     public func applyDelegations() -> [Card] {
         var created: [Card] = []
         let cols = (try? columns()) ?? []

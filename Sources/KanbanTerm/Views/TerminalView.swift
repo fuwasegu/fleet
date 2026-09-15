@@ -33,22 +33,34 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// 残留プローズに `weak_permission` 等が再度反応して Blocked に戻ってしまう(=Done と
     /// Blocked を行き来する)。権限/信頼ダイアログは「ターン進行中」または「最初のターンが
     /// 始まる前」にしか出現し得ないという事実を使い、Stop 後にターンが動いていないと分かって
-    /// いる間は TUI 判定側の Blocked を丸ごと握りつぶす(他の状態には一切影響しない)。
+    /// いる間は TUI 判定側の Blocked を丸ごと握りつぶす。
     ///
-    /// - `nil`: まだ一度も `Stop` を観測していない(セッション起動直後、または hooks が
+    /// 対称の逆方向(v0.12.4 で追加): ターンが**進行中**だと分かっている間は、TUI 判定側の
+    /// Idle を丸ごと握りつぶす。Claude Code の OSC タイトルは「idle なら ✳、working なら
+    /// 点字スピナー」という安定信号ではない — 同一ターンの最中でもスピナー(`◐◑◒◓`,
+    /// `working_title`)と `✳` 接頭のタイトル(`idle_star`)を行き来する。サンプリングの瞬間に
+    /// `✳` 側を引くと `working_title` は不一致、`idle_star` だけが一致して Working ⇄ Done を
+    /// 行ったり来たりする(実際はずっと working)。hooks はターン境界について権威的
+    /// (`UserPromptSubmit` で始まり `Stop` で終わる)なので、ターン進行中と分かっている間は
+    /// OSC タイトル由来の Idle を採用しない。`idle_star` ルール自体はターンが動いていない
+    /// (`turnRunning != true`)ときには引き続き正しい信号であり、削除・弱体化はしない。
+    ///
+    /// - `nil`: まだ一度も hook イベントを観測していない(セッション起動直後、または hooks が
     ///   一つも届いていない)。信頼フォルダ確認ダイアログは最初のターンが始まる**前**に
     ///   出現するため、ここで Blocked を握りつぶしてしまうと起動直後の信頼ダイアログを
-    ///   一生検知できなくなる。よって `nil` の間は抑止を一切効かせない(=デフォルトは
-    ///   安全側=何もしない)。抑止は「`Stop` を実際に観測した後」だけの話であって、
+    ///   一生検知できなくなる。よって `nil` の間はどちらの抑止も一切効かせない(=デフォルトは
+    ///   安全側=何もしない)。抑止は「hook イベントを実際に観測した後」だけの話であって、
     ///   デフォルトの挙動ではない。
     /// - `true`: 直近の hook イベントが `Stop` 以外(`UserPromptSubmit`/`PreToolUse`/
-    ///   `PostToolUse` など、ツール系イベントを含む)= ターン進行中。TUI Blocked をそのまま通す。
-    /// - `false`: 直近の hook イベントが `Stop` = ターンは終わっている。TUI Blocked を抑止する。
+    ///   `PostToolUse` など、ツール系イベントを含む)= ターン進行中。TUI Blocked はそのまま
+    ///   通すが、TUI Idle は抑止する(=現在の状態を維持する。Working から動かない)。
+    /// - `false`: 直近の hook イベントが `Stop` = ターンは終わっている。TUI Blocked を抑止する
+    ///   (Idle 側の抑止はここでは効かせない = 通常どおり idle 判定を採用する)。
     ///
     /// Codex カードには hooks が一切配線されない(`agent-hook-state.json` 自体が生成されない)
     /// ため `applyHookState()` は常に早期 return し、この値は Codex カードでは一生 `nil` の
-    /// ままになる = 抑止は Codex では原理的に発生しない。念のため `classify()` 側でも
-    /// `agentKind == .claude` を明示のガードとして重ねている。
+    /// ままになる = どちらの抑止も Codex では原理的に発生しない。念のため `classify()` 側でも
+    /// 両方の分岐で `agentKind == .claude` を明示のガードとして重ねている。
     private var turnRunning: Bool?
 
     init(cardID: UUID, context: ModelContext, isViewing: @escaping () -> Bool) {
@@ -92,6 +104,13 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
         // を検知する必要がある期間)や Codex(hooks が無いので turnRunning は常に nil)では
         // 抑止しない。他の状態(working/idle/unknown)には一切影響しない。
         if state == .blocked, agentKind == .claude, turnRunning == false {
+            return nil
+        }
+        // 対称の逆方向: ターンが進行中だと分かっている間は、TUI 側が Idle と判定してもそれを
+        // 採用しない(OSC タイトルはターン中に ✳/スピナーを行き来し、`idle_star` が単発で
+        // 一致しても実際は working — Working ⇄ Done フラッピングの原因だった)。`turnRunning
+        // == nil`(hooks 未観測)や Codex では抑止しない(上のプロパティのコメント参照)。
+        if state == .idle, agentKind == .claude, turnRunning == true {
             return nil
         }
         // 問いは画面全体から探す(起動直後の全画面ダイアログは下部窓の外に出る)。
