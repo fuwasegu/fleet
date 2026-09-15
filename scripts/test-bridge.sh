@@ -230,4 +230,34 @@ set -e
 [ -s "$BAD_OUT" ] && fail "hook-event mode wrote to stdout on malformed JSON"
 [ -f "$ROOT6/cards/$CARD6/agent-hook-state.json" ] && fail "malformed JSON should not produce a state file" || true
 
+# --- Notification は Claude Code の汎用通知チャンネル(権限確認とアイドル通知の両方が
+#     流れてくる)。message が権限確認を示さない限り(= アイドル通知含む)無視し、状態
+#     ファイルを一切書いてはいけない(実バグ: 完了して1分アイドルなだけのカードが
+#     Notification で Blocked に化けていた)。 ---
+ROOT7="$(mktemp -d)"
+CARD7="88888888-8888-8888-8888-888888888888"
+mkdir -p "$ROOT7/cards/$CARD7"
+IDLE_NOTIFICATION_JSON='{"hook_event_name":"Notification","message":"Claude is waiting for your input","session_id":"sess-idle1"}'
+IDLE_OUT="$(mktemp)"
+set +e
+printf '%s' "$IDLE_NOTIFICATION_JSON" | "$BRIDGE" --hook-event --card "$CARD7" --root "$ROOT7" > "$IDLE_OUT"
+IDLE_STATUS=$?
+set -e
+[ "$IDLE_STATUS" = "0" ] || fail "hook-event mode exited non-zero ($IDLE_STATUS) on an idle Notification event"
+[ -s "$IDLE_OUT" ] && fail "hook-event mode wrote to stdout on an idle Notification event"
+[ -f "$ROOT7/cards/$CARD7/agent-hook-state.json" ] && fail "idle 'waiting for your input' Notification must not write a state file"
+
+# --- 同じ Notification イベントでも message が権限確認を示す場合は blocked を書く。 ---
+PERMISSION_NOTIFICATION_JSON='{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","session_id":"sess-perm1"}'
+PERM_OUT="$(mktemp)"
+set +e
+printf '%s' "$PERMISSION_NOTIFICATION_JSON" | "$BRIDGE" --hook-event --card "$CARD7" --root "$ROOT7" > "$PERM_OUT"
+PERM_STATUS=$?
+set -e
+[ "$PERM_STATUS" = "0" ] || fail "hook-event mode exited non-zero ($PERM_STATUS) on a permission Notification event"
+[ -s "$PERM_OUT" ] && fail "hook-event mode wrote to stdout on a permission Notification event"
+PERM_STATE_FILE="$ROOT7/cards/$CARD7/agent-hook-state.json"
+[ -f "$PERM_STATE_FILE" ] || fail "permission Notification event did not write agent-hook-state.json"
+grep -q '"state":"blocked"' "$PERM_STATE_FILE" || fail "permission Notification should map to state blocked (got: $(cat "$PERM_STATE_FILE"))"
+
 echo "fleet-bridge protocol test: OK"

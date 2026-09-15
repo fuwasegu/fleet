@@ -2,6 +2,10 @@
 
 タグの注記から抜粋(各バージョン1行)。新しい順。
 
+## v0.12.3
+- **完了したカードが1分後に「承認待ち」になる**のを修正。Claude Code の `Notification` hook は汎用通知で、ターン終了から約60秒後に `Claude is waiting for your input` として発火する。v0.12.0 でこれを一律 Blocked にマップしていたため、終わって放置したカードが軒並み承認待ちに落ち、Done と Blocking を往復していた。メッセージ内容で振り分け、"permission" を含むもの(`Claude needs your permission to use X`)だけを Blocked とし、それ以外の通知は**状態を書き換えない**(`Stop` が設定した Done を保持する)
+  - 診断は推測ではなく実データから: blocked のカードは全て `blockedPrompt` が空で TUI 由来でないことが分かり、各カードの `agent-hook-state.json` が全て `Notification` だった。実際の通知文面は pty で hook ペイロードを捕捉して確認した
+
 ## v0.12.2
 - **本文の言い回しで Blocked に誤判定される**のを修正。`weak_permission` は「do you want to」等の文言と「`yes` か `❯` を含む」の組み合わせで発火していたが、**待機中の入力欄には `❯` が常にある**ため、実質「本文にその一言があれば承認待ち」になっていた。Claude はターンの締めで普通にこう書くので頻発する。実際の選択メニュー行(`❯ 1. Yes` / `2. No`)を**行単位**で要求し、走査範囲も画面下部に限定した
 - **Blocked と Done を往復する**のも同じ原因。`Stop` で Done にしても、その後の端末出力(statusline の更新など)で TUI 判定が再実行され本文の文言でまた Blocked になっていた。構造的な歯止めとして、`Stop` 観測後から次の `UserPromptSubmit` までは TUI 由来の blocked を抑止する(ターンが走っていなければ承認ダイアログは出得ないため)。セッション開始直後の「信頼しますか」は最初のターン前に出るので、`Stop` を一度も観測していない間は抑止しない。Codex は hooks が無いので無影響
