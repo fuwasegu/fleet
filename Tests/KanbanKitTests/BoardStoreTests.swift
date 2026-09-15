@@ -501,6 +501,11 @@ struct BoardStoreTests {
         #expect(ChannelStore.entries(for: chID).last?.effectiveKind == "note")
     }
 
+    // 以下 `_ = store.applyBoardIntents(...)` は意図的な破棄: 戻り値(新規カード=裏起動対象)は
+    // `A2AChannelHub`(app ターゲット、テスト対象外)だけが使う。ここでは盤面への副作用のみ検証する。
+    // `@discardableResult` を外したのは runOnce 側の取りこぼし回帰を型で防ぐためで、テストの
+    // 意図的な破棄まで禁止する趣旨ではない。
+
     /// board intent(create_card)を適用すると、カードが作られチャンネルへ参加する。
     @Test func applyCreateCardIntentJoinsChannel() throws {
         let store = try makeStore()
@@ -513,13 +518,13 @@ struct BoardStoreTests {
 
         let intent = BoardIntent(kind: "create_card", fromID: a.id.uuidString, title: "spawned", column: "Todo")
         writeIntent(intent, to: ch.id)
-        store.applyBoardIntents(for: ch.id)
+        _ = store.applyBoardIntents(for: ch.id)
 
         let created = try #require(todo.cards.first { $0.title == "spawned" })
         #expect(created.channel?.id == ch.id)          // 同じチャンネルへ参加
         #expect(ch.cards.count == 3)
         // 二度目の適用は冪等(重複作成しない)
-        store.applyBoardIntents(for: ch.id)
+        _ = store.applyBoardIntents(for: ch.id)
         #expect(todo.cards.filter { $0.title == "spawned" }.count == 1)
     }
 
@@ -534,7 +539,7 @@ struct BoardStoreTests {
         defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
 
         writeIntent(BoardIntent(kind: "move_card", fromID: a.id.uuidString, card: "b", column: "Done"), to: ch.id)
-        store.applyBoardIntents(for: ch.id)
+        _ = store.applyBoardIntents(for: ch.id)
         #expect(b.column?.name == "Done")
     }
 
@@ -554,12 +559,12 @@ struct BoardStoreTests {
 
         let intent = BoardIntent(kind: "move_card", fromID: a.id.uuidString, card: "b", column: "Done")
         writeIntent(intent, to: ch.id)
-        store.applyBoardIntents(for: ch.id)
+        _ = store.applyBoardIntents(for: ch.id)
         #expect(b.column?.name == "Done")
         #expect(ChannelStore.appliedIntentIDs(for: ch.id).contains(intent.id))
 
         try store.moveCard(b, to: other, at: 0)
-        store.applyBoardIntents(for: ch.id)   // 同じ intents ファイルへの2回目の適用
+        _ = store.applyBoardIntents(for: ch.id)   // 同じ intents ファイルへの2回目の適用
         #expect(b.column?.name == "Other")    // 再適用されていれば "Done" へ戻ってしまうはず
         #expect(done.cards.isEmpty)
     }
@@ -576,11 +581,31 @@ struct BoardStoreTests {
 
         let intent = BoardIntent(kind: "delete_everything", fromID: a.id.uuidString)
         writeIntent(intent, to: ch.id)
-        store.applyBoardIntents(for: ch.id)
+        _ = store.applyBoardIntents(for: ch.id)
 
         #expect(try store.columns().count == 1)   // 何も破壊されていない
         #expect(ch.cards.count == 2)
         #expect(ChannelStore.appliedIntentIDs(for: ch.id).contains(intent.id))   // 適用済みとして記録
+    }
+
+    /// 回帰ピン留め: `applyBoardIntents(for:)` は create_card intent で新規作成したカードを
+    /// **戻り値として返す**(裏起動の対象)。ここが崩れると `A2AChannelHub.runOnce` は
+    /// MCP で一気に作らせたカードの一部を裏起動できず、開かない限り Agent が動かない
+    /// (実際に起きた回帰。`@discardableResult` を外して呼び出し元での破棄も型で防いでいる)。
+    @Test func applyBoardIntentsReturnsNewlyCreatedCards() throws {
+        let store = try makeStore()
+        let todo = try store.addColumn(name: "Todo")
+        let a = try store.addCard(title: "a", to: todo)
+        let b = try store.addCard(title: "b", to: todo)
+        let ch = try #require(try store.connectCards(a, b))
+        defer { cleanup(cards: [a.id, b.id], channels: [ch.id]) }
+
+        writeIntent(BoardIntent(kind: "create_card", fromID: a.id.uuidString, title: "spawned2", column: "Todo"), to: ch.id)
+        let created = store.applyBoardIntents(for: ch.id)
+
+        #expect(created.map(\.title) == ["spawned2"])
+        // 何も適用しなければ空配列(既存カードは絶対に含めない = 裏起動対象は新規カードだけ)。
+        #expect(store.applyBoardIntents(for: ch.id).isEmpty)
     }
 
     /// board.json スナップショットが列とチャンネルカードを反映する。

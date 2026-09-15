@@ -7,6 +7,12 @@ import SwiftData
 ///
 /// 直した穴: **まだどのカードともつながっていないカードは fleet_create_card すら呼べず、
 /// 「最初の委譲」が原理的にできなかった**(intent ファイルがチャンネル dir にしか無いため)。
+///
+/// このファイルの `_ = store.applyDelegations()` は意図的な破棄: 戻り値(新規カード=裏起動対象)
+/// は `A2AChannelHub` だけが使う(app ターゲットでテスト対象外)。ここでは `store.cards()` 等の
+/// 副作用だけを見るので受け取らない。`applyDelegations()` から `@discardableResult` を外したのは
+/// 呼び出し元(runOnce)が誤って捨てて裏起動を取りこぼす回帰を型で防ぐためで、
+/// テスト側の意図的な破棄まで禁止する趣旨ではない。
 @MainActor
 struct DelegationTests {
     init() { TestFleetRoot.bootstrap() }
@@ -30,13 +36,33 @@ struct DelegationTests {
 
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "調査カード"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "調査カード" }
         #expect(made != nil)
         // 双方が同じチャンネルに入っている = 以降 fleet_message / fleet_recall が使える
         #expect(creator.channel != nil)
         #expect(made?.channel?.id == creator.channel?.id)
+        cleanup(creator, made)
+    }
+
+    /// 回帰ピン留め: `applyDelegations()` は新規作成したカードを**戻り値として返す**
+    /// (裏起動の対象)。ここが崩れると `A2AChannelHub.runOnce` は MCP で一気に作らせた委譲
+    /// カードの一部を裏起動できず、開かない限り Agent が動かない(実際に起きた回帰。
+    /// `@discardableResult` を外して呼び出し元での破棄も型で防いでいる)。
+    @Test func applyDelegationsReturnsNewlyCreatedCards() throws {
+        let store = try makeStore()
+        let col = try store.addColumn(name: "作業中")
+        let creator = try store.addCard(title: "親カード", to: col)
+
+        ChannelStore.appendDelegation(
+            BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "調査カード2"))
+        let created = store.applyDelegations()
+
+        #expect(created.map(\.title) == ["調査カード2"])
+        let made = created.first
+        // 消費済みなので再適用しても空配列(claim がファイルを rename して取り除くため)。
+        #expect(store.applyDelegations().isEmpty)
         cleanup(creator, made)
     }
 
@@ -49,7 +75,7 @@ struct DelegationTests {
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                         title: "レビュー", agent: "codex", model: "gpt-5-codex"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "レビュー" }
         #expect(made?.agentKind == .codex)
@@ -66,7 +92,7 @@ struct DelegationTests {
 
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "子"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "子" }
         #expect(made?.dangerSkip == true)
@@ -81,7 +107,7 @@ struct DelegationTests {
 
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "子"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "子" }
         #expect(made?.dangerSkip == false)
@@ -97,7 +123,7 @@ struct DelegationTests {
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                         title: "変な agent", agent: "gemini"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "変な agent" }
         #expect(made != nil)
@@ -114,7 +140,7 @@ struct DelegationTests {
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                         title: "危険なモデル名", model: "opus; rm -rf /"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let made = try store.cards().first { $0.title == "危険なモデル名" }
         #expect(made?.model == nil)
@@ -131,9 +157,9 @@ struct DelegationTests {
 
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "一度だけ"))
-        store.applyDelegations()
-        store.applyDelegations()
-        store.applyDelegations()
+        _ = store.applyDelegations()
+        _ = store.applyDelegations()
+        _ = store.applyDelegations()
 
         #expect(try store.cards().filter { $0.title == "一度だけ" }.count == 1)
         cleanup(creator, nil)
@@ -145,7 +171,7 @@ struct DelegationTests {
         let ghost = UUID()
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: ghost.uuidString, title: "幽霊の子"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
         #expect(try store.cards().allSatisfy { $0.title != "幽霊の子" })
         ChannelStore.removeBinding(cardID: ghost)
     }
@@ -160,7 +186,7 @@ struct DelegationTests {
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                         title: "列指定ミス", column: "存在しない列"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
         let made = try store.cards().first { $0.title == "列指定ミス" }
         #expect(made?.column?.name == "作業中")   // 先頭列へフォールバック
         cleanup(creator, made)
@@ -178,7 +204,7 @@ struct DelegationTests {
         try Data("これは JSON ではない".utf8).write(to: junk)
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString, title: "後"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         #expect(try store.cards().contains { $0.title == "前" })
         #expect(try store.cards().contains { $0.title == "後" })
@@ -199,7 +225,7 @@ struct DelegationTests {
                                                  title: "2番目", createdAt: base.addingTimeInterval(10)))
         ChannelStore.appendDelegation(BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                                                  title: "1番目", createdAt: base))
-        store.applyDelegations()
+        _ = store.applyDelegations()
 
         let order = try store.cards().filter { ["1番目", "2番目"].contains($0.title) }
             .sorted { $0.order < $1.order }.map(\.title)
@@ -238,7 +264,7 @@ struct DelegationTests {
         ChannelStore.appendDelegation(
             BoardIntent(kind: "create_card", fromID: creator.id.uuidString,
                         title: "怪しい dir", dir: "/does/not/exist/xyz"))
-        store.applyDelegations()
+        _ = store.applyDelegations()
         let made = try store.cards().first { $0.title == "怪しい dir" }
         #expect(made != nil)
         #expect(made?.workingDirPath == nil)

@@ -2,6 +2,10 @@
 
 タグの注記から抜粋(各バージョン1行)。新しい順。
 
+## v0.12.4
+- **MCP で一度に作らせたカードの最初の1枚しか裏起動しない**のを修正。`A2AChannelHub.runOnce` が `applyDelegations()` / `applyBoardIntents()` の戻り値(=このパスで新規作成されたカード＝裏起動の対象)を捨てていた。委譲の claim は**ファイルの rename で奪う**方式なので、裏起動を行う委譲ウォッチャと、戻り値を捨てる `runOnce` が同じキューを取り合い、先に奪われた分は起動されずに消えていた。`runOnce` でも作成されたカードを裏起動するようにし、併せて両メソッドの `@discardableResult` を外して戻り値の取りこぼしが目に見えるようにした
+- **ずっと作業中なのに Working と Done を往復する**のを修正。Claude の OSC タイトルは待機/稼働の安定した信号ではなく、**ターンの途中でも `✳` 接頭辞に変わる**(実測: カウント処理の継続中に `◐ Count from 1 to 40` → `✳ Count from 1 to 40`)。`idle_star` がこれを待機と解釈していた。hooks はターン境界を正確に知っているので、**ターン実行中は TUI 由来の idle を無視**する(blocked 側で既に入れている抑止の対称版)。`idle_star` 自体はターン外では正しいので残す。Codex は hooks が無く常に対象外
+
 ## v0.12.3
 - **完了したカードが1分後に「承認待ち」になる**のを修正。Claude Code の `Notification` hook は汎用通知で、ターン終了から約60秒後に `Claude is waiting for your input` として発火する。v0.12.0 でこれを一律 Blocked にマップしていたため、終わって放置したカードが軒並み承認待ちに落ち、Done と Blocking を往復していた。メッセージ内容で振り分け、"permission" を含むもの(`Claude needs your permission to use X`)だけを Blocked とし、それ以外の通知は**状態を書き換えない**(`Stop` が設定した Done を保持する)
   - 診断は推測ではなく実データから: blocked のカードは全て `blockedPrompt` が空で TUI 由来でないことが分かり、各カードの `agent-hook-state.json` が全て `Notification` だった。実際の通知文面は pty で hook ペイロードを捕捉して確認した

@@ -147,8 +147,12 @@ final class A2AChannelHub {
     private func runOnce(_ channelID: UUID) async {
         guard let context else { return }
         let store = BoardStore(context: context)
-        store.applyDelegations()                                      // 無所属カードからの委譲(チャンネル非依存)
-        store.applyBoardIntents(for: channelID)                      // Agent の盤面操作(create/move)
+        // 戻り値(このパスで新しく作られたカード)を捨てると、それらのカードは誰にも
+        // 裏起動されないまま残る(MCP で一気に複数枚作らせたときに最初の1枚しか自動発火
+        // しなかった不具合の原因)。他の呼び出し元(delegation watcher / sync)と同じく、
+        // ここでも新規カードだけを裏起動する。
+        startDelegatedCards(store.applyDelegations())                  // 無所属カードからの委譲(チャンネル非依存)
+        startDelegatedCards(store.applyBoardIntents(for: channelID))  // Agent の盤面操作(create/move)
         await store.applyWorktreeIntentsAsync(for: channelID)         // Agent の worktree 作成 intent を適用(git は MainActor 外)
         if let ch = store.channel(withID: channelID) { store.syncChannel(ch) }  // peers を live 同期
         store.writeBoardSnapshot(for: channelID)                // fleet_board 用スナップショット(worktree 反映)
