@@ -201,8 +201,9 @@ final class AgentStateMonitor: NSObject, @preconcurrency LocalProcessTerminalVie
     /// Blocked の precedence: 「信頼するフォルダですか?」等のダイアログは hooks を一切発火
     /// させないため、Blocked の検知は今後も TUI(AgentDetection)側が権威。hook がそれ以外
     /// (working/idle/unknown)を伝えてきても、現在の TUI 判定が Blocked と言っているならそれを
-    /// 優先し hook 側は無視する。hook 自身が blocked(Notification/PermissionRequest)を
-    /// 伝えてきた場合はそのまま適用する(TUI より弱めるべき状況が無いため)。
+    /// 優先し hook 側は無視する。hook 自身が blocked(PermissionRequest、または権限確認を
+    /// 示す message 付きの Notification)を伝えてきた場合はそのまま適用する(TUI より
+    /// 弱めるべき状況が無いため)。
     ///
     /// ただし `Stop` イベントだけは例外で、TUI-blocked override を経由**しない**。
     /// 権限/信頼プロンプトはターンの進行中(または最初のターンが始まる前)にしか現れ得ない

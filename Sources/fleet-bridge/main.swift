@@ -55,20 +55,31 @@ if CommandLine.arguments.contains("--hook-event") {
 /// アトミックに書く(Data(options:.atomic) は同一ディレクトリに一時ファイルを書いてから
 /// rename するため、読み手が部分書き込みを見ることはない)。失敗はすべて握って無視する。
 ///
-/// イベント名 → 状態の対応は KanbanKit.AgentHookEvent.state(forEventName:) と同じもの
-/// (テストはそちらで KanbanKitTests として持つ)。bridge は KanbanKit にリンクできない
+/// イベント名(+ message) → 状態の対応は KanbanKit.AgentHookEvent.state(forEventName:message:)
+/// と同じもの(テストはそちらで KanbanKitTests として持つ)。bridge は KanbanKit にリンクできない
 /// (SECURITY item 1 で使う validUUID 等と違い、こちらは AgentLaunch.normalizedModel の
 /// 事情と同じ)ため、手動同期した複製をここに置く。対応を変えるときは両方直すこと。
+///
+/// `Notification` は Claude Code の汎用通知チャンネルで、「権限確認」と「アイドル通知
+/// (例: "Claude is waiting for your input"、ターン終了のおよそ60秒後に発火)」の両方が
+/// ここに流れてくる。message に "permission" が(大小文字を区別せず)含まれる場合だけ
+/// blocked とし、それ以外は無視する(状態ファイルを書かない = 直前の状態を保持する。
+/// Notification 一律 blocked は、完了して1分アイドルになっただけのカードが軒並み
+/// Blocked に化ける実バグだった)。
 func writeHookEventState(cardID: String, fleetRoot: URL) {
     guard !cardID.isEmpty else { return }   // --card が不正/未指定 = 書かない
     let input = FileHandle.standardInput.readDataToEndOfFile()
     guard let obj = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
           let eventName = obj["hook_event_name"] as? String else { return }
+    let message = obj["message"] as? String
     let state: String
     switch eventName {
     case "UserPromptSubmit", "PreToolUse", "PostToolUse": state = "working"
     case "Stop": state = "idle"
-    case "Notification", "PermissionRequest": state = "blocked"
+    case "PermissionRequest": state = "blocked"
+    case "Notification":
+        guard let message, message.localizedCaseInsensitiveContains("permission") else { return }
+        state = "blocked"
     case "SessionEnd": state = "unknown"
     default: return   // 未知のイベント名は無視(状態を書かない)
     }
